@@ -1,0 +1,881 @@
+#!/usr/bin/env python3
+"""
+Attendance & Monthly Performance Register
+=========================================
+A zero-dependency local web server (Python standard library only).
+
+Roles
+-----
+  * Admin  (the code YOU create) : manages the student roster, attendance, and codes.
+  * Teacher (a second code)      : enters monthly test scores and reads reports.
+  * Observer (a third code)      : read-only access; cannot change anything.
+
+Data lives in attendance.db next to this file.
+
+Run:  python server.py          (then open http://127.0.0.1:8765)
+"""
+
+import csv
+import hashlib
+import io
+import json
+import os
+import re
+import secrets
+import sqlite3
+import sys
+import threading
+import time
+import traceback
+from contextlib import contextmanager
+from datetime import datetime
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from urllib.parse import urlparse, parse_qs
+
+# --------------------------------------------------------------------------
+# Configuration
+# --------------------------------------------------------------------------
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+DB_PATH = os.environ.get("ATTENDANCE_DB", os.path.join(BASE_DIR, "attendance.db"))
+# Render and other hosts run the process from the repository root. Keep the
+# normal local layout, but also tolerate the project being nested one level
+# deeper so a misplaced folder does not make the homepage return 404.
+STATIC_DIR = os.path.join(BASE_DIR, "static")
+if not os.path.isdir(STATIC_DIR):
+    nested_static = os.path.join(BASE_DIR, "attendance_system", "static")
+    if os.path.isdir(nested_static):
+        STATIC_DIR = nested_static
+
+HOST = os.environ.get("ATTENDANCE_HOST", "0.0.0.0")
+# Render provides PORT automatically. Local use keeps 8765.
+PORT = int(os.environ.get("PORT", os.environ.get("ATTENDANCE_PORT", "8765")))
+
+SESSION_TTL_SECONDS = 8 * 60 * 60          # 8 hours
+PBKDF2_ITERATIONS = 120_000
+MONTH_RE = re.compile(r"^\d{4}-(0[1-9]|1[0-2])$")
+DATE_RE = re.compile(r"^\d{4}-(0[1-9]|1[0-2])-(0[1-9]|[12]\d|3[01])$")
+ROLL_RE = re.compile(r"^\d{3}$")
+
+SESSIONS = {}
+SESSIONS_LOCK = threading.Lock()
+
+MIME = {
+    ".html": "text/html; charset=utf-8",
+    ".css": "text/css; charset=utf-8",
+    ".js": "application/javascript; charset=utf-8",
+    ".json": "application/json; charset=utf-8",
+    ".svg": "image/svg+xml",
+    ".png": "image/png",
+    ".jpg": "image/jpeg",
+    ".ico": "image/x-icon",
+    ".woff2": "font/woff2",
+}
+
+
+# --------------------------------------------------------------------------
+# Database
+# --------------------------------------------------------------------------
+SCHEMA = """
+CREATE TABLE IF NOT EXISTS settings (
+    key   TEXT PRIMARY KEY,
+    value TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS students (
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    name       TEXT NOT NULL,
+    grade      TEXT NOT NULL,
+    roll3      TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    UNIQUE (grade, roll3)
+);
+CREATE TABLE IF NOT EXISTS attendance (
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    student_id INTEGER NOT NULL REFERENCES students(id) ON DELETE CASCADE,
+    date       TEXT NOT NULL,
+    status     TEXT NOT NULL CHECK (status IN ('present','absent','late')),
+    UNIQUE (student_id, date)
+);
+CREATE TABLE IF NOT EXISTS tests (
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    name       TEXT NOT NULL,
+    month      TEXT NOT NULL,
+    max_score  REAL NOT NULL,
+    test_date  TEXT,
+    created_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS scores (
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    test_id    INTEGER NOT NULL REFERENCES tests(id) ON DELETE CASCADE,
+    student_id INTEGER NOT NULL REFERENCES students(id) ON DELETE CASCADE,
+    score      REAL NOT NULL,
+    UNIQUE (test_id, student_id)
+);
+CREATE INDEX IF NOT EXISTS idx_att_date ON attendance(date);
+CREATE INDEX IF NOT EXISTS idx_scores_test ON scores(test_id);
+"""
+
+
+@contextmanager
+def db_conn():
+    conn = sqlite3.connect(DB_PATH, timeout=15)
+    conn.row_factory = sqlite3.Row
+    conn.execute("PRAGMA foreign_keys = ON")
+    try:
+        yield conn
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+
+
+def init_db():
+    with db_conn() as c:
+        c.executescript(SCHEMA)
+
+
+def reset_admin_from_environment():
+    """Reset the Admin code when ADMIN_RESET_CODE is supplied.
+
+    Use this as a temporary recovery mechanism. Set ADMIN_RESET_CODE to the
+    desired new Admin code in Render, deploy/restart once, log in, then remove
+    the environment variable. A fingerprint prevents repeated resets with the
+    same value; changing the value performs another reset.
+    """
+    new_code = os.environ.get("ADMIN_RESET_CODE")
+    if new_code is None:
+        return
+    new_code = new_code.strip()
+    if not 4 <= len(new_code) <= 64:
+        raise RuntimeError("ADMIN_RESET_CODE must be 4 to 64 characters.")
+
+    fingerprint = hashlib.sha256(new_code.encode("utf-8")).hexdigest()
+    with db_conn() as c:
+        old_fingerprint = get_setting(c, "admin_reset_fingerprint")
+        if old_fingerprint != fingerprint:
+            c.execute(
+                "INSERT INTO settings(key, value) VALUES(?, ?) "
+                "ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+                ("admin_hash", hash_code(new_code)),
+            )
+            c.execute(
+                "INSERT INTO settings(key, value) VALUES(?, ?) "
+                "ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+                ("admin_reset_fingerprint", fingerprint),
+            )
+            print("Admin code reset from ADMIN_RESET_CODE.")
+
+
+# --------------------------------------------------------------------------
+# Password codes
+# --------------------------------------------------------------------------
+def hash_code(code: str) -> str:
+    salt = secrets.token_hex(16)
+    dk = hashlib.pbkdf2_hmac("sha256", code.encode("utf-8"), bytes.fromhex(salt), PBKDF2_ITERATIONS)
+    return f"pbkdf2_sha256${PBKDF2_ITERATIONS}${salt}${dk.hex()}"
+
+
+def verify_code(code: str, stored: str) -> bool:
+    try:
+        _algo, iterations, salt, digest = stored.split("$")
+        dk = hashlib.pbkdf2_hmac("sha256", code.encode("utf-8"), bytes.fromhex(salt), int(iterations))
+        return secrets.compare_digest(dk.hex(), digest)
+    except Exception:
+        return False
+
+
+def get_setting(conn, key):
+    row = conn.execute("SELECT value FROM settings WHERE key = ?", (key,)).fetchone()
+    return row["value"] if row else None
+
+
+def setup_required():
+    with db_conn() as c:
+        return get_setting(c, "admin_hash") is None
+
+
+def create_session(role):
+    token = secrets.token_urlsafe(32)
+    with SESSIONS_LOCK:
+        SESSIONS[token] = {"role": role, "exp": time.time() + SESSION_TTL_SECONDS}
+    return token
+
+
+def drop_session(token):
+    with SESSIONS_LOCK:
+        SESSIONS.pop(token, None)
+
+
+def session_role(token):
+    if not token:
+        return None
+    with SESSIONS_LOCK:
+        info = SESSIONS.get(token)
+        if not info:
+            return None
+        if info["exp"] < time.time():
+            SESSIONS.pop(token, None)
+            return None
+        return info["role"]
+
+
+# --------------------------------------------------------------------------
+# Validation helpers
+# --------------------------------------------------------------------------
+def text(value, field, min_len=1, max_len=80):
+    if not isinstance(value, str):
+        raise ValueError(f"{field} must be text.")
+    value = value.strip()
+    if len(value) < min_len:
+        raise ValueError(f"{field} must be at least {min_len} characters.")
+    if len(value) > max_len:
+        raise ValueError(f"{field} must be at most {max_len} characters.")
+    return value
+
+
+def month_of(value):
+    value = text(value, "Month", 7, 7)
+    if not MONTH_RE.match(value):
+        raise ValueError("Month must be in YYYY-MM format.")
+    return value
+
+
+def date_of(value):
+    value = text(value, "Date", 10, 10)
+    if not DATE_RE.match(value):
+        raise ValueError("Date must be in YYYY-MM-DD format.")
+    datetime.strptime(value, "%Y-%m-%d")  # rejects impossible days
+    return value
+
+
+def letter_grade(pct):
+    if pct is None:
+        return "-"
+    if pct >= 90:
+        return "A+"
+    if pct >= 80:
+        return "A"
+    if pct >= 70:
+        return "B+"
+    if pct >= 60:
+        return "B"
+    if pct >= 50:
+        return "C"
+    if pct >= 40:
+        return "D"
+    return "F"
+
+
+def pct(obtained, maximum):
+    if not maximum:
+        return None
+    return round(100.0 * obtained / maximum, 1)
+
+
+# --------------------------------------------------------------------------
+# Query builders
+# --------------------------------------------------------------------------
+def list_students(conn, grade=None, q=None):
+    sql = "SELECT * FROM students"
+    args = []
+    where = []
+    if grade:
+        where.append("grade = ?")
+        args.append(grade)
+    if q:
+        where.append("(name LIKE ? OR roll3 LIKE ? OR grade LIKE ?)")
+        args.extend([f"%{q}%", f"%{q}%", f"%{q}%"])
+    if where:
+        sql += " WHERE " + " AND ".join(where)
+    sql += " ORDER BY CAST(grade AS INTEGER), grade, roll3, name"
+    return [dict(r) for r in conn.execute(sql, args).fetchall()]
+
+
+def attendance_summary(conn, month, grade=None):
+    rows = conn.execute(
+        """
+        SELECT s.id, s.name, s.grade, s.roll3,
+               SUM(CASE WHEN a.status='present' THEN 1 ELSE 0 END) AS present,
+               SUM(CASE WHEN a.status='absent'  THEN 1 ELSE 0 END) AS absent,
+               SUM(CASE WHEN a.status='late'    THEN 1 ELSE 0 END) AS late,
+               COUNT(a.id) AS marked
+        FROM students s
+        LEFT JOIN attendance a ON a.student_id = s.id AND a.date LIKE ?
+        WHERE (? IS NULL OR s.grade = ?)
+        GROUP BY s.id
+        ORDER BY CAST(s.grade AS INTEGER), s.grade, s.roll3, s.name
+        """,
+        (f"{month}-%", grade, grade),
+    ).fetchall()
+    out = []
+    for r in rows:
+        d = dict(r)
+        on_time = d["present"] + d["late"]
+        d["percent"] = round(100.0 * on_time / d["marked"], 1) if d["marked"] else None
+        out.append(d)
+    return out
+
+
+def build_report(conn, month, grade=None):
+    students = list_students(conn, grade=grade)
+    tests = [dict(r) for r in conn.execute(
+        "SELECT * FROM tests WHERE month = ? ORDER BY COALESCE(test_date, created_at), id",
+        (month,)).fetchall()]
+    test_ids = [t["id"] for t in tests]
+
+    scores = {}
+    if test_ids:
+        marks = conn.execute(
+            f"SELECT test_id, student_id, score FROM scores WHERE test_id IN ({','.join('?' * len(test_ids))})",
+            test_ids).fetchall()
+        scores = {(m["test_id"], m["student_id"]): m["score"] for m in marks}
+
+    att = {row["id"]: row for row in attendance_summary(conn, month, grade=grade)}
+
+    rows = []
+    for s in students:
+        marks = {}
+        obtained = 0.0
+        maximum = 0.0
+        for t in tests:
+            val = scores.get((t["id"], s["id"]))
+            marks[t["id"]] = val
+            if val is not None:
+                obtained += val
+                maximum += t["max_score"]
+        p = pct(obtained, maximum) if maximum else None
+        a = att.get(s["id"], {"present": 0, "absent": 0, "late": 0, "marked": 0, "percent": None})
+        rows.append({
+            "student_id": s["id"], "name": s["name"], "grade": s["grade"], "roll3": s["roll3"],
+            "marks": marks, "obtained": round(obtained, 2), "max_total": round(maximum, 2),
+            "percent": p, "grade_letter": letter_grade(p), "rank": None,
+            "attendance": a,
+        })
+
+    ranked = sorted(rows, key=lambda r: (-(r["percent"] if r["percent"] is not None else -1),
+                                         r["grade"], r["roll3"]))
+    prev_key, prev_rank = object(), 0  # competition ranking: equal scores share a rank
+    for i, r in enumerate(ranked, start=1):
+        if r["percent"] is None:
+            r["rank"] = None
+            continue
+        if r["percent"] != prev_key:
+            prev_key, prev_rank = r["percent"], i
+        r["rank"] = prev_rank
+
+    scored = [r["percent"] for r in rows if r["percent"] is not None]
+    class_stats = {
+        "students": len(rows),
+        "tested": len(scored),
+        "average": round(sum(scored) / len(scored), 1) if scored else None,
+        "highest": max(scored) if scored else None,
+        "tests": len(tests),
+    }
+    return {"month": month, "grade": grade, "tests": tests, "rows": rows, "class": class_stats}
+
+
+def student_detail(conn, student_id):
+    s = conn.execute("SELECT * FROM students WHERE id = ?", (student_id,)).fetchone()
+    if not s:
+        raise ValueError("Student not found.")
+    s = dict(s)
+
+    att_months = [dict(r) for r in conn.execute(
+        """
+        SELECT substr(date,1,7) AS month,
+               SUM(CASE WHEN status='present' THEN 1 ELSE 0 END) AS present,
+               SUM(CASE WHEN status='absent'  THEN 1 ELSE 0 END) AS absent,
+               SUM(CASE WHEN status='late'    THEN 1 ELSE 0 END) AS late,
+               COUNT(*) AS marked
+        FROM attendance WHERE student_id = ?
+        GROUP BY substr(date,1,7) ORDER BY month DESC
+        """, (student_id,)).fetchall()]
+    for m in att_months:
+        on_time = m["present"] + m["late"]
+        m["percent"] = round(100.0 * on_time / m["marked"], 1) if m["marked"] else None
+
+    perf = [dict(r) for r in conn.execute(
+        """
+        SELECT t.month AS month, COUNT(*) AS tests,
+               SUM(sc.score) AS obtained, SUM(t.max_score) AS maximum
+        FROM tests t JOIN scores sc ON sc.test_id = t.id
+        WHERE sc.student_id = ?
+        GROUP BY t.month ORDER BY t.month DESC
+        """, (student_id,)).fetchall()]
+    for p in perf:
+        p["percent"] = pct(p["obtained"], p["maximum"])
+        p["grade_letter"] = letter_grade(p["percent"])
+
+    recent = [dict(r) for r in conn.execute(
+        "SELECT date, status FROM attendance WHERE student_id = ? ORDER BY date DESC LIMIT 14",
+        (student_id,)).fetchall()]
+
+    detail_tests = [dict(r) for r in conn.execute(
+        """
+        SELECT t.id, t.name, t.month, t.max_score, t.test_date, sc.score
+        FROM tests t LEFT JOIN scores sc ON sc.test_id = t.id AND sc.student_id = ?
+        ORDER BY t.month DESC, COALESCE(t.test_date, t.created_at), t.id
+        """, (student_id,)).fetchall()]
+
+    return {"student": s, "attendance_months": att_months, "performance": perf,
+            "recent": recent, "tests": detail_tests}
+
+
+# --------------------------------------------------------------------------
+# HTTP handler
+# --------------------------------------------------------------------------
+class Handler(BaseHTTPRequestHandler):
+    server_version = "AttendanceRegister/1.0"
+
+    # ---------- plumbing ----------
+    def log_message(self, fmt, *args):
+        sys.stderr.write("[%s] %s\n" % (datetime.now().strftime("%H:%M:%S"), fmt % args))
+
+    def _send(self, body: bytes, content_type: str, status: int = 200, extra=None):
+        self.send_response(status)
+        self.send_header("Content-Type", content_type)
+        self.send_header("Content-Length", str(len(body)))
+        self.send_header("Cache-Control", "no-store")
+        for k, v in (extra or {}).items():
+            self.send_header(k, v)
+        self.end_headers()
+        try:
+            self.wfile.write(body)
+        except BrokenPipeError:
+            pass
+
+    def send_json(self, data, status=200):
+        self._send(json.dumps(data).encode("utf-8"), "application/json; charset=utf-8", status)
+
+    def fail(self, message, status=400):
+        self.send_json({"error": message}, status)
+
+    def body(self):
+        length = int(self.headers.get("Content-Length") or 0)
+        if length <= 0:
+            return {}
+        raw = self.rfile.read(length)
+        if len(raw) > 2_000_000:
+            raise ValueError("Request too large.")
+        try:
+            data = json.loads(raw.decode("utf-8"))
+        except Exception:
+            raise ValueError("Invalid JSON body.")
+        if not isinstance(data, dict):
+            raise ValueError("JSON object expected.")
+        return data
+
+    def _token(self):
+        header = self.headers.get("Authorization", "")
+        if header.startswith("Bearer "):
+            return header[7:].strip()
+        return None
+
+    def auth(self, require_role=None):
+        """Returns role or sends an error response and returns None."""
+        role = session_role(self._token())
+        if not role:
+            self.fail("Session expired or not signed in.", 401)
+            return None
+        if require_role == "admin" and role != "admin":
+            self.fail("Admin access required.", 403)
+            return None
+        return role
+
+    # ---------- verbs ----------
+    def do_GET(self):
+        self._handle("GET")
+
+    def do_HEAD(self):
+        # Render health checks may use HEAD /. Return the same status as GET
+        # without sending the response body.
+        parsed = urlparse(self.path)
+        path = parsed.path
+        if path.startswith("/api/"):
+            self.send_response(404)
+            self.send_header("Content-Length", "0")
+            self.end_headers()
+            return
+        if path in ("/", ""):
+            path = "/index.html"
+        full = os.path.realpath(os.path.join(STATIC_DIR, path.lstrip("/")))
+        root = os.path.realpath(STATIC_DIR)
+        if not full.startswith(root + os.sep) or not os.path.isfile(full):
+            self.send_response(404)
+            self.send_header("Content-Length", "0")
+            self.end_headers()
+            return
+        ext = os.path.splitext(full)[1].lower()
+        self.send_response(200)
+        self.send_header("Content-Type", MIME.get(ext, "application/octet-stream"))
+        self.send_header("Content-Length", str(os.path.getsize(full)))
+        self.end_headers()
+
+    def do_POST(self):
+        self._handle("POST")
+
+    def do_DELETE(self):
+        self._handle("DELETE")
+
+    def do_PUT(self):
+        self._handle("PUT")
+
+    def _handle(self, method):
+        parsed = urlparse(self.path)
+        path = parsed.path
+        if path.startswith("/api/"):
+            try:
+                self.api(method, path, parse_qs(parsed.query))
+            except ValueError as exc:
+                self.fail(str(exc), 400)
+            except Exception:
+                traceback.print_exc()
+                self.fail("Server error. See console for details.", 500)
+        else:
+            if method != "GET":
+                self.fail("Method not allowed.", 405)
+            self.serve_static(path)
+
+    # ---------- static ----------
+    def serve_static(self, path):
+        if path in ("/", ""):
+            path = "/index.html"
+        full = os.path.realpath(os.path.join(STATIC_DIR, path.lstrip("/")))
+        if not full.startswith(os.path.realpath(STATIC_DIR) + os.sep):
+            self.fail("Not found.", 404)
+            return
+        if not os.path.isfile(full):
+            self.fail("Not found.", 404)
+            return
+        ext = os.path.splitext(full)[1].lower()
+        with open(full, "rb") as fh:
+            self._send(fh.read(), MIME.get(ext, "application/octet-stream"))
+
+    # ---------- API ----------
+    def api(self, method, path, qs):
+        def q(name, default=None):
+            v = qs.get(name, [default])
+            return v[0] if v else default
+
+        # --- public ---
+        if method == "GET" and path == "/api/status":
+            self.send_json({"setup_required": setup_required(), "app": "Attendance Register"})
+            return
+
+        if method == "POST" and path == "/api/setup":
+            if not setup_required():
+                self.fail("Setup already completed.", 403)
+                return
+            b = self.body()
+            admin = text(b.get("admin_code"), "Admin code", 4, 64)
+            teacher = text(b.get("teacher_code"), "Teacher code", 4, 64)
+            observer = text(b.get("observer_code"), "Observer code", 4, 64)
+            if admin == teacher or admin == observer or teacher == observer:
+                raise ValueError("All three codes must be different.")
+            with db_conn() as c:
+                c.execute("INSERT INTO settings(key, value) VALUES(?,?)", ("admin_hash", hash_code(admin)))
+                c.execute("INSERT INTO settings(key, value) VALUES(?,?)", ("teacher_hash", hash_code(teacher)))
+                c.execute("INSERT INTO settings(key, value) VALUES(?,?)", ("observer_hash", hash_code(observer)))
+            self.send_json({"ok": True, "token": create_session("admin"), "role": "admin"})
+            return
+
+        if method == "POST" and path == "/api/login":
+            b = self.body()
+            role = b.get("role")
+            if role not in ("admin", "teacher", "observer"):
+                raise ValueError("Choose admin or teacher.")
+            code = text(b.get("code"), "Code", 1, 64)
+            key = "admin_hash" if role == "admin" else ("teacher_hash" if role == "teacher" else "observer_hash")
+            with db_conn() as c:
+                stored = get_setting(c, key)
+            if not stored or not verify_code(code, stored):
+                time.sleep(0.4)
+                self.fail("Incorrect code.", 401)
+                return
+            self.send_json({"ok": True, "role": role, "token": create_session(role)})
+            return
+
+        if method == "POST" and path == "/api/logout":
+            drop_session(self._token())
+            self.send_json({"ok": True})
+            return
+
+        if method == "GET" and path == "/api/me":
+            role = self.auth()
+            if role:
+                self.send_json({"role": role})
+            return
+
+        # --- everything below needs a session ---
+        role = self.auth()
+        if not role:
+            return
+        is_admin = role == "admin"
+
+        # codes
+        if method == "POST" and path == "/api/codes":
+            if not is_admin:
+                self.fail("Admin access required.", 403)
+                return
+            b = self.body()
+            updates = {}
+            if b.get("admin_code"):
+                updates["admin_hash"] = hash_code(text(b["admin_code"], "Admin code", 4, 64))
+            if b.get("teacher_code"):
+                updates["teacher_hash"] = hash_code(text(b["teacher_code"], "Teacher code", 4, 64))
+            if b.get("observer_code"):
+                updates["observer_hash"] = hash_code(text(b["observer_code"], "Observer code", 4, 64))
+            if not updates:
+                raise ValueError("Provide a new admin code, a new teacher code, or both.")
+            with db_conn() as c:
+                for k, v in updates.items():
+                    c.execute("INSERT INTO settings(key, value) VALUES(?,?) "
+                              "ON CONFLICT(key) DO UPDATE SET value = excluded.value", (k, v))
+            self.send_json({"ok": True})
+            return
+
+        # students
+        if path == "/api/students":
+            if method == "GET":
+                with db_conn() as c:
+                    students = list_students(c, grade=q("grade"), q=q("q"))
+                    grades = [r["grade"] for r in c.execute(
+                        "SELECT DISTINCT grade FROM students ORDER BY CAST(grade AS INTEGER), grade")]
+                self.send_json({"students": students, "grades": grades})
+                return
+            if method == "POST":
+                if not is_admin:
+                    self.fail("Only the admin can add students.", 403)
+                    return
+                b = self.body()
+                name = text(b.get("name"), "Name", 2, 60)
+                grade = text(b.get("grade"), "Grade", 1, 30)
+                roll3 = text(b.get("roll3"), "Roll number", 1, 5)
+                if not ROLL_RE.match(roll3):
+                    raise ValueError("Roll number must be exactly the last 3 digits (000-999).")
+                try:
+                    with db_conn() as c:
+                        cur = c.execute(
+                            "INSERT INTO students(name, grade, roll3, created_at) VALUES(?,?,?,?)",
+                            (name, grade, roll3, datetime.now().isoformat(timespec="seconds")))
+                        student_id = cur.lastrowid
+                except sqlite3.IntegrityError:
+                    raise ValueError(f"Grade {grade} already has a student with roll {roll3}.")
+                self.send_json({"ok": True, "id": student_id})
+                return
+            if method == "DELETE":
+                if not is_admin:
+                    self.fail("Only the admin can remove students.", 403)
+                    return
+                sid = int(q("id", "0") or 0)
+                with db_conn() as c:
+                    cur = c.execute("DELETE FROM students WHERE id = ?", (sid,))
+                    if cur.rowcount == 0:
+                        raise ValueError("Student not found.")
+                self.send_json({"ok": True})
+                return
+
+        # attendance
+        if path == "/api/attendance/day" and method == "GET":
+            d = date_of(q("date"))
+            grade = q("grade")
+            with db_conn() as c:
+                students = list_students(c, grade=grade)
+                marked = {r["student_id"]: r["status"] for r in c.execute(
+                    "SELECT student_id, status FROM attendance WHERE date = ?", (d,))}
+            for s in students:
+                s["status"] = marked.get(s["id"])
+            self.send_json({"date": d, "students": students})
+            return
+
+        if path == "/api/attendance/month" and method == "GET":
+            m = month_of(q("month"))
+            with db_conn() as c:
+                rows = attendance_summary(c, m, grade=q("grade"))
+            self.send_json({"month": m, "rows": rows})
+            return
+
+        if path == "/api/attendance" and method == "POST":
+            if not is_admin:
+                self.fail("Only the admin can record attendance.", 403)
+                return
+            b = self.body()
+            d = date_of(b.get("date"))
+            entries = b.get("entries")
+            if not isinstance(entries, list):
+                raise ValueError("entries must be a list.")
+            valid = {"present", "absent", "late", None}
+            with db_conn() as c:
+                for e in entries:
+                    status = e.get("status")
+                    if status not in valid:
+                        raise ValueError("Status must be present, absent, late or null.")
+                    sid = int(e.get("student_id") or 0)
+                    if status is None:
+                        c.execute("DELETE FROM attendance WHERE student_id = ? AND date = ?", (sid, d))
+                    else:
+                        c.execute(
+                            "INSERT INTO attendance(student_id, date, status) VALUES(?,?,?) "
+                            "ON CONFLICT(student_id, date) DO UPDATE SET status = excluded.status",
+                            (sid, d, status))
+            self.send_json({"ok": True, "date": d})
+            return
+
+        # tests & scores (admin or teacher)
+        if path == "/api/tests":
+            if method == "GET":
+                m = month_of(q("month"))
+                with db_conn() as c:
+                    tests = [dict(r) for r in c.execute(
+                        "SELECT * FROM tests WHERE month = ? ORDER BY COALESCE(test_date, created_at), id",
+                        (m,))]
+                self.send_json({"month": m, "tests": tests})
+                return
+            if method == "POST":
+                if role not in ("admin", "teacher"):
+                    self.fail("Observer access is read-only.", 403)
+                    return
+                b = self.body()
+                name = text(b.get("name"), "Test name", 2, 60)
+                m = month_of(b.get("month"))
+                try:
+                    max_score = float(b.get("max_score"))
+                except (TypeError, ValueError):
+                    raise ValueError("Maximum score must be a number.")
+                if not 1 <= max_score <= 1000:
+                    raise ValueError("Maximum score must be between 1 and 1000.")
+                test_date = b.get("test_date") or None
+                if test_date:
+                    test_date = date_of(test_date)
+                with db_conn() as c:
+                    cur = c.execute(
+                        "INSERT INTO tests(name, month, max_score, test_date, created_at) VALUES(?,?,?,?,?)",
+                        (name, m, max_score, test_date, datetime.now().isoformat(timespec="seconds")))
+                    tid = cur.lastrowid
+                self.send_json({"ok": True, "id": tid})
+                return
+            if method == "DELETE":
+                if not is_admin:
+                    self.fail("Only the admin can delete tests.", 403)
+                    return
+                tid = int(q("id", "0") or 0)
+                with db_conn() as c:
+                    cur = c.execute("DELETE FROM tests WHERE id = ?", (tid,))
+                    if cur.rowcount == 0:
+                        raise ValueError("Test not found.")
+                self.send_json({"ok": True})
+                return
+
+        if path == "/api/scores":
+            if method == "GET":
+                tid = int(q("test_id", "0") or 0)
+                with db_conn() as c:
+                    t = c.execute("SELECT * FROM tests WHERE id = ?", (tid,)).fetchone()
+                    if not t:
+                        raise ValueError("Test not found.")
+                    students = list_students(c, grade=q("grade"))
+                    marks = {r["student_id"]: r["score"] for r in c.execute(
+                        "SELECT student_id, score FROM scores WHERE test_id = ?", (tid,))}
+                for s in students:
+                    s["score"] = marks.get(s["id"])
+                self.send_json({"test": dict(t), "students": students})
+                return
+            if method == "POST":
+                if role not in ("admin", "teacher"):
+                    self.fail("Observer access is read-only.", 403)
+                    return
+                b = self.body()
+                tid = int(b.get("test_id") or 0)
+                entries = b.get("entries")
+                if not isinstance(entries, list):
+                    raise ValueError("entries must be a list.")
+                with db_conn() as c:
+                    t = c.execute("SELECT * FROM tests WHERE id = ?", (tid,)).fetchone()
+                    if not t:
+                        raise ValueError("Test not found.")
+                    ceiling = float(t["max_score"])
+                    for e in entries:
+                        raw = e.get("score")
+                        sid = int(e.get("student_id") or 0)
+                        if raw in (None, ""):
+                            c.execute("DELETE FROM scores WHERE test_id = ? AND student_id = ?", (tid, sid))
+                            continue
+                        try:
+                            val = float(raw)
+                        except (TypeError, ValueError):
+                            raise ValueError("Scores must be numbers.")
+                        if val < 0 or val > ceiling:
+                            raise ValueError(f"Scores must be between 0 and {ceiling:g}.")
+                        c.execute(
+                            "INSERT INTO scores(test_id, student_id, score) VALUES(?,?,?) "
+                            "ON CONFLICT(test_id, student_id) DO UPDATE SET score = excluded.score",
+                            (tid, sid, val))
+                self.send_json({"ok": True})
+                return
+
+        # reports
+        if path == "/api/report" and method == "GET":
+            m = month_of(q("month"))
+            with db_conn() as c:
+                report = build_report(c, m, grade=q("grade"))
+            self.send_json(report)
+            return
+
+        if path == "/api/student" and method == "GET":
+            sid = int(q("id", "0") or 0)
+            with db_conn() as c:
+                data = student_detail(c, sid)
+            self.send_json(data)
+            return
+
+        if path == "/api/export" and method == "GET":
+            m = month_of(q("month"))
+            grade = q("grade")
+            with db_conn() as c:
+                report = build_report(c, m, grade=grade)
+            buf = io.StringIO()
+            writer = csv.writer(buf)
+            header = ["Grade", "Roll No", "Name"]
+            header += [f"{t['name']} (/{t['max_score']:g})" for t in report["tests"]]
+            header += ["Total", "Max", "%", "Grade", "Rank",
+                       "Days Present", "Days Absent", "Days Late", "Attendance %"]
+            writer.writerow(header)
+            for r in report["rows"]:
+                a = r["attendance"]
+                row = [r["grade"], r["roll3"], r["name"]]
+                row += [("" if r["marks"][t["id"]] is None else r["marks"][t["id"]]) for t in report["tests"]]
+                row += [r["obtained"], r["max_total"],
+                        "" if r["percent"] is None else r["percent"],
+                        r["grade_letter"], "" if r["rank"] is None else r["rank"],
+                        a.get("present") or 0, a.get("absent") or 0, a.get("late") or 0,
+                        "" if a.get("percent") is None else a["percent"]]
+                writer.writerow(row)
+            data = buf.getvalue().encode("utf-8-sig")
+            self._send(data, "text/csv; charset=utf-8", 200, {
+                "Content-Disposition": f'attachment; filename="report_{m}.csv"'})
+            return
+
+        self.fail("Unknown endpoint.", 404)
+
+
+# --------------------------------------------------------------------------
+def main():
+    init_db()
+    reset_admin_from_environment()
+    server = ThreadingHTTPServer((HOST, PORT), Handler)
+    server.daemon_threads = True
+    print("=" * 62)
+    print("  Attendance & Monthly Performance Register")
+    print(f"  Open  http://{HOST}:{PORT}   in your browser")
+    print(f"  Data  {DB_PATH}")
+    print("  Press Ctrl+C to stop.")
+    print("=" * 62)
+    try:
+        server.serve_forever()
+    except KeyboardInterrupt:
+        print("\nStopped.")
+
+
+if __name__ == "__main__":
+    main()
