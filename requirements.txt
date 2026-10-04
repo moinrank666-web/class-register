@@ -1,0 +1,3 @@
+# Only used when DATABASE_URL is set (external Postgres on Render).
+# Local mode (SQLite file) needs nothing — stdlib only.
+psycopg[binary]>=3.1

@@ -1,0 +1,12 @@
+# Never commit the live database (contains codes' hashes + student data)
+attendance.db
+test_attendance.db
+*.db-journal
+*.db-wal
+*.db-shm
+
+# Logs & caches
+server.log
+*.log
+__pycache__/
+*.pyc

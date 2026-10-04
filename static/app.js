@@ -110,7 +110,7 @@ function authShell(inner) {
 
 function renderSetup() {
   authShell(`
-    <div class="brand-mini"><div class="m">✨</div><div><b>First-time setup</b><span>Create the three codes that open this register</span></div></div>
+    <div class="brand-mini"><div class="m">✨</div><div><b>First-time setup</b><span>Create the two codes that open this register</span></div></div>
     <div class="notice">🔐 These codes are stored as salted hashes — <b>they cannot be recovered</b>. Write them down somewhere safe.</div>
     <div id="auth-err"></div>
     <form id="setup-form" novalidate>
@@ -124,27 +124,21 @@ function renderSetup() {
         <span class="hint">Must be different — enters monthly test scores</span></div>
       <div class="field"><label>Confirm teacher code</label>
         <input class="code-input" type="password" id="teacher-code2" autocomplete="new-password" placeholder="••••" required></div>
-      <div class="field"><label>OBSERVER code</label>
-        <input class="code-input" type="password" id="observer-code" autocomplete="new-password" placeholder="••••" minlength="4" required>
-        <span class="hint">Read-only access — can view but cannot change anything</span></div>
-      <div class="field"><label>Confirm observer code</label><input class="code-input" type="password" id="observer-code2" autocomplete="new-password" placeholder="••••" required></div>
       <button class="btn btn-primary" style="width:100%;justify-content:center" type="submit">Create codes &amp; open register →</button>
     </form>`);
   $('#setup-form').addEventListener('submit', async e => {
     e.preventDefault();
     const a  = $('#admin-code').value.trim(), a2 = $('#admin-code2').value.trim();
     const t  = $('#teacher-code').value.trim(), t2 = $('#teacher-code2').value.trim();
-    const o  = $('#observer-code').value.trim(), o2 = $('#observer-code2').value.trim();
     const box = $('#auth-err');
     box.innerHTML = '';
     const err = m => { box.innerHTML = `<div class="alert">${esc(m)}</div>`; };
-    if (a.length < 4 || t.length < 4 || o.length < 4) return err('Each code must be at least 4 characters.');
+    if (a.length < 4 || t.length < 4) return err('Each code must be at least 4 characters.');
     if (a !== a2) return err('The two admin code entries do not match.');
     if (t !== t2) return err('The two teacher code entries do not match.');
-    if (o !== o2) return err('The two observer code entries do not match.');
-    if (new Set([a,t,o]).size !== 3) return err('The admin, teacher, and observer codes must all be different.');
+    if (a === t)  return err('The admin and teacher codes must be different.');
     try {
-      const r = await api('/api/setup', { method: 'POST', body: { admin_code: a, teacher_code: t, observer_code: o } });
+      const r = await api('/api/setup', { method: 'POST', body: { admin_code: a, teacher_code: t } });
       App.token = r.token; App.role = r.role;
       sessionStorage.setItem('cr_token', r.token);
       sessionStorage.setItem('cr_role', r.role);
@@ -161,7 +155,6 @@ function renderLogin(message = '') {
     <div class="role-tabs" id="role-tabs">
       <button type="button" data-role="admin" class="on">🛡️ Admin</button>
       <button type="button" data-role="teacher">👩‍🏫 Teacher</button>
-      <button type="button" data-role="observer">👁️ Observer</button>
     </div>
     <form id="login-form" novalidate>
       <div class="field"><label id="code-label">Admin code</label>
@@ -177,12 +170,10 @@ function renderLogin(message = '') {
     const b = e.target.closest('button[data-role]'); if (!b) return;
     role = b.dataset.role;
     $$('#role-tabs button').forEach(x => x.classList.toggle('on', x === b));
-    $('#code-label').textContent = role === 'admin' ? 'Admin code' : role === 'observer' ? 'Observer code' : 'Teacher code';
+    $('#code-label').textContent = role === 'admin' ? 'Admin code' : 'Teacher code';
     $('#code-hint').textContent  = role === 'admin'
       ? 'Manages the student roster and attendance'
-      : role === 'observer'
-        ? 'Read-only access — can view but cannot change anything'
-        : 'Enters monthly test scores and reads reports';
+      : 'Enters monthly test scores and reads reports';
     $('#login-code').focus();
   });
   $('#login-form').addEventListener('submit', async e => {
@@ -225,7 +216,7 @@ function renderShell() {
           </div>
         </div>
         <div class="hero-actions">
-          <span class="role-chip">${App.role === 'admin' ? '🛡️ Admin access' : App.role === 'observer' ? '👁️ Observer (read-only)' : '👩‍🏫 Teacher access'}</span>
+          <span class="role-chip">${App.role === 'admin' ? '🛡️ Admin access' : '👩‍🏫 Teacher access'}</span>
           ${App.role === 'admin' ? '<button class="hero-btn" id="btn-settings">⚙️ Codes</button>' : ''}
           <button class="hero-btn" id="btn-logout">Sign out</button>
         </div>
@@ -267,18 +258,17 @@ async function openCodeModal() {
   openModal({
     title: '⚙️ Change access codes',
     body: `
-      <div class="notice">All access codes must be at least 4 characters and different. Leave a field blank to keep the current code.</div>
+      <div class="notice">Both codes must be at least 4 characters and different from each other. Leave a field blank to keep the current code.</div>
       <div id="code-err"></div>
       <div class="field"><label>New admin code</label><input class="code-input" type="password" id="new-admin" placeholder="leave blank to keep"></div>
-      <div class="field"><label>New teacher code</label><input class="code-input" type="password" id="new-teacher" placeholder="leave blank to keep"></div>
-      <div class="field"><label>New observer code</label><input class="code-input" type="password" id="new-observer" placeholder="leave blank to keep"></div>`,
+      <div class="field"><label>New teacher code</label><input class="code-input" type="password" id="new-teacher" placeholder="leave blank to keep"></div>`,
     footer: `<button class="btn btn-ghost" id="m-cancel">Cancel</button>
              <button class="btn btn-primary" id="save-codes">Save codes</button>`,
   });
   $('#m-cancel').onclick = closeModal;
   $('#save-codes').onclick = async () => {
-    const body = { admin_code: $('#new-admin').value.trim(), teacher_code: $('#new-teacher').value.trim(), observer_code: $('#new-observer').value.trim() };
-    if (!body.admin_code && !body.teacher_code && !body.observer_code) return $('#code-err').innerHTML = '<div class="alert">Enter at least one new code.</div>';
+    const body = { admin_code: $('#new-admin').value.trim(), teacher_code: $('#new-teacher').value.trim() };
+    if (!body.admin_code && !body.teacher_code) return $('#code-err').innerHTML = '<div class="alert">Enter at least one new code.</div>';
     try {
       await api('/api/codes', { method: 'POST', body });
       closeModal(); toast('Codes updated');
@@ -425,7 +415,7 @@ async function renderAttendance() {
 
   $('#view').innerHTML = `
     <div class="section-head">
-      <div><h2>🗓️ Daily attendance</h2><p>Tap a status for each student, then save. ${isAdmin ? '' : 'Read-only access.'}</p></div>
+      <div><h2>🗓️ Daily attendance</h2><p>Tap a status for each student, then save. ${isAdmin ? '' : 'Read-only for the teacher code.'}</p></div>
     </div>
 
     <div class="card">
@@ -570,7 +560,7 @@ async function renderScores() {
   $('#view').innerHTML = `
     <div class="section-head">
       <div><h2>📝 Monthly test scores</h2><p>Create each test, enter the marks — they are allotted to students automatically.</p></div>
-      ${App.role !== 'observer' ? '<button class="btn btn-primary no-print" id="btn-new-test">＋ New test</button>' : '<span class="muted no-print">👁️ View-only mode</span>'}
+      <button class="btn btn-primary no-print" id="btn-new-test">＋ New test</button>
     </div>
 
     <div class="card">
@@ -601,7 +591,7 @@ async function renderScores() {
 
   $('#t-month').addEventListener('change', e => { f.month = e.target.value || thisMonth(); f.testId = null; renderScores(); });
   $('#t-grade').addEventListener('change', e => { f.grade = e.target.value; renderScores(); });
-  if ($('#btn-new-test')) $('#btn-new-test').onclick = openNewTest;
+  $('#btn-new-test').onclick = openNewTest;
 
   $('#test-grid').addEventListener('click', async e => {
     const card = e.target.closest('.test-card'); if (!card) return;
@@ -673,7 +663,7 @@ async function renderScoreEntry(testId) {
         </div>
         <div class="month-nav no-print">
           <span class="muted" id="entry-tally" style="font-size:13.2px"></span>
-          ${App.role !== 'observer' ? '<button class="btn btn-primary" id="btn-save-scores">💾 Save scores</button>' : '<span class="muted">Read-only</span>'}
+          <button class="btn btn-primary" id="btn-save-scores">💾 Save scores</button>
         </div>
       </div>
       <div class="table-wrap">
@@ -733,7 +723,6 @@ async function renderScoreEntry(testId) {
     pending[sid] = inp.value;
     recalc();
   });
-  if (!$('#btn-save-scores')) { recalc(); return; }
   $('#btn-save-scores').addEventListener('click', async () => {
     const entries = Object.entries(pending).map(([id, score]) => ({ student_id: Number(id), score }));
     try {

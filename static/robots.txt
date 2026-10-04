@@ -1,0 +1,6 @@
+# Class Register — https://class-register-cudp.onrender.com/
+User-agent: *
+Allow: /
+Disallow: /api/
+
+Sitemap: https://class-register-cudp.onrender.com/sitemap.xml

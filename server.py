@@ -8,7 +8,6 @@ Roles
 -----
   * Admin  (the code YOU create) : manages the student roster, attendance, and codes.
   * Teacher (a second code)      : enters monthly test scores and reads reports.
-  * Observer (a third code)      : read-only access; cannot change anything.
 
 Data lives in attendance.db next to this file.
 
@@ -37,27 +36,58 @@ from urllib.parse import urlparse, parse_qs
 # --------------------------------------------------------------------------
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 DB_PATH = os.environ.get("ATTENDANCE_DB", os.path.join(BASE_DIR, "attendance.db"))
-# Render and other hosts run the process from the repository root. Keep the
-# normal local layout, but also tolerate the project being nested one level
-# deeper so a misplaced folder does not make the homepage return 404.
+
+# External persistence: when DATABASE_URL is set (e.g. Render Postgres / Neon),
+# all data lives there and survives restarts & redeploys. Without it the app
+# keeps using the local SQLite file exactly as before (zero dependencies).
+DATABASE_URL = os.environ.get("DATABASE_URL", "").strip()
+USE_PG = bool(DATABASE_URL)
+LIKE_OP = "ILIKE" if USE_PG else "LIKE"
+
+if USE_PG:
+    try:
+        import psycopg
+        from psycopg.rows import dict_row
+    except ImportError as exc:
+        raise SystemExit(
+            'DATABASE_URL is set but psycopg is missing.\n'
+            'Run:  pip install "psycopg[binary]"   (or pip install -r requirements.txt)'
+        ) from exc
 STATIC_DIR = os.path.join(BASE_DIR, "static")
-if not os.path.isdir(STATIC_DIR):
-    nested_static = os.path.join(BASE_DIR, "attendance_system", "static")
-    if os.path.isdir(nested_static):
-        STATIC_DIR = nested_static
+HOST = os.environ.get("ATTENDANCE_HOST", "127.0.0.1")
+def _resolve_port() -> int:
+    """ATTENDANCE_PORT wins, then a valid $PORT (e.g. Render's), else 8765.
+    Guards against junk values like PORT=0 which would bind a random port."""
+    for key in ("ATTENDANCE_PORT", "PORT"):
+        raw = os.environ.get(key)
+        if raw and raw.isdigit() and 0 < int(raw) <= 65535:
+            return int(raw)
+    return 8765
 
-HOST = os.environ.get("ATTENDANCE_HOST", "0.0.0.0")
-# Render provides PORT automatically. Local use keeps 8765.
-PORT = int(os.environ.get("PORT", os.environ.get("ATTENDANCE_PORT", "8765")))
 
-SESSION_TTL_SECONDS = 8 * 60 * 60          # 8 hours
-PBKDF2_ITERATIONS = 120_000
+PORT = _resolve_port()
+
+SESSION_TTL_SECONDS = 8 * 60 * 60          # absolute lifetime: 8 hours
+SESSION_IDLE_SECONDS = 2 * 60 * 60         # logged out after 2 h of inactivity
+PBKDF2_ITERATIONS = 600_000                # OWASP-recommended PBKDF2-SHA256 work factor
+
+# Brute-force protection for the code endpoints (in-memory, per client IP)
+RATE_WINDOW_SECONDS = 60
+RATE_MAX_FAILURES = 8
+RATE_LOCKOUT_SECONDS = 600
+
+HTML_CSP = ("default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; "
+            "img-src 'self' data: blob:; font-src 'self'; connect-src 'self'; "
+            "object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'")
+API_CSP = "default-src 'none'; frame-ancestors 'none'"
 MONTH_RE = re.compile(r"^\d{4}-(0[1-9]|1[0-2])$")
 DATE_RE = re.compile(r"^\d{4}-(0[1-9]|1[0-2])-(0[1-9]|[12]\d|3[01])$")
 ROLL_RE = re.compile(r"^\d{3}$")
 
 SESSIONS = {}
 SESSIONS_LOCK = threading.Lock()
+LOGIN_ATTEMPTS = {}          # "kind:ip" -> {start, fails, lock_until}
+LOGIN_ATTEMPTS_LOCK = threading.Lock()
 
 MIME = {
     ".html": "text/html; charset=utf-8",
@@ -69,6 +99,8 @@ MIME = {
     ".jpg": "image/jpeg",
     ".ico": "image/x-icon",
     ".woff2": "font/woff2",
+    ".txt": "text/plain; charset=utf-8",
+    ".xml": "application/xml; charset=utf-8",
 }
 
 
@@ -114,9 +146,80 @@ CREATE INDEX IF NOT EXISTS idx_att_date ON attendance(date);
 CREATE INDEX IF NOT EXISTS idx_scores_test ON scores(test_id);
 """
 
+SCHEMA_PG = """
+CREATE TABLE IF NOT EXISTS settings (
+    key   TEXT PRIMARY KEY,
+    value TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS students (
+    id         BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    name       TEXT NOT NULL,
+    grade      TEXT NOT NULL,
+    roll3      TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    UNIQUE (grade, roll3)
+);
+CREATE TABLE IF NOT EXISTS attendance (
+    id         BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    student_id BIGINT NOT NULL REFERENCES students(id) ON DELETE CASCADE,
+    date       TEXT NOT NULL,
+    status     TEXT NOT NULL CHECK (status IN ('present','absent','late')),
+    UNIQUE (student_id, date)
+);
+CREATE TABLE IF NOT EXISTS tests (
+    id         BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    name       TEXT NOT NULL,
+    month      TEXT NOT NULL,
+    max_score  DOUBLE PRECISION NOT NULL,
+    test_date  TEXT,
+    created_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS scores (
+    id         BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    test_id    BIGINT NOT NULL REFERENCES tests(id) ON DELETE CASCADE,
+    student_id BIGINT NOT NULL REFERENCES students(id) ON DELETE CASCADE,
+    score      DOUBLE PRECISION NOT NULL,
+    UNIQUE (test_id, student_id)
+);
+CREATE INDEX IF NOT EXISTS idx_att_date ON attendance(date);
+CREATE INDEX IF NOT EXISTS idx_scores_test ON scores(test_id);
+"""
+
+
+class _PgConn:
+    """sqlite3-compatible surface over a psycopg connection
+    (? placeholders become %s; rows come back as plain dicts)."""
+
+    def __init__(self, conn):
+        self._conn = conn
+
+    def execute(self, sql, params=None):
+        return self._conn.execute(sql.replace("?", "%s"), params if params else None)
+
+    def commit(self):
+        self._conn.commit()
+
+    def rollback(self):
+        self._conn.rollback()
+
+    def close(self):
+        self._conn.close()
+
 
 @contextmanager
 def db_conn():
+    if USE_PG:
+        raw = psycopg.connect(DATABASE_URL, connect_timeout=10,
+                              row_factory=dict_row, autocommit=False)
+        try:
+            yield _PgConn(raw)
+            raw.commit()
+        except Exception:
+            raw.rollback()
+            raise
+        finally:
+            raw.close()
+        return
     conn = sqlite3.connect(DB_PATH, timeout=15)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA foreign_keys = ON")
@@ -131,40 +234,38 @@ def db_conn():
 
 
 def init_db():
+    if USE_PG:
+        with db_conn() as c:
+            for stmt in SCHEMA_PG.split(";"):
+                stmt = stmt.strip()
+                if stmt:
+                    c.execute(stmt)
+        return
     with db_conn() as c:
         c.executescript(SCHEMA)
 
 
-def reset_admin_from_environment():
-    """Reset the Admin code when ADMIN_RESET_CODE is supplied.
+def grade_num(col="grade"):
+    """Numeric view of the grade column for ordering (non-numeric sorts as 0).
+    Both dialects: SQLite CAST yields 0 for junk; PG CAST would raise, so use a
+    regex-guarded expression there."""
+    if USE_PG:
+        return (f"(CASE WHEN {col} ~ '^[0-9]+' "
+                f"THEN CAST(regexp_replace({col}, '\\D', '', 'g') AS INTEGER) ELSE 0 END)")
+    return f"CAST({col} AS INTEGER)"
 
-    Use this as a temporary recovery mechanism. Set ADMIN_RESET_CODE to the
-    desired new Admin code in Render, deploy/restart once, log in, then remove
-    the environment variable. A fingerprint prevents repeated resets with the
-    same value; changing the value performs another reset.
-    """
-    new_code = os.environ.get("ADMIN_RESET_CODE")
-    if new_code is None:
-        return
-    new_code = new_code.strip()
-    if not 4 <= len(new_code) <= 64:
-        raise RuntimeError("ADMIN_RESET_CODE must be 4 to 64 characters.")
 
-    fingerprint = hashlib.sha256(new_code.encode("utf-8")).hexdigest()
-    with db_conn() as c:
-        old_fingerprint = get_setting(c, "admin_reset_fingerprint")
-        if old_fingerprint != fingerprint:
-            c.execute(
-                "INSERT INTO settings(key, value) VALUES(?, ?) "
-                "ON CONFLICT(key) DO UPDATE SET value = excluded.value",
-                ("admin_hash", hash_code(new_code)),
-            )
-            c.execute(
-                "INSERT INTO settings(key, value) VALUES(?, ?) "
-                "ON CONFLICT(key) DO UPDATE SET value = excluded.value",
-                ("admin_reset_fingerprint", fingerprint),
-            )
-            print("Admin code reset from ADMIN_RESET_CODE.")
+def insert_id(c, sql, params):
+    """Run an INSERT and return the new row id on both backends."""
+    if USE_PG:
+        return c.execute(sql + " RETURNING id", params).fetchone()["id"]
+    return c.execute(sql, params).lastrowid
+
+
+def is_unique_violation(exc) -> bool:
+    if USE_PG:
+        return isinstance(exc, psycopg.errors.UniqueViolation)
+    return isinstance(exc, sqlite3.IntegrityError)
 
 
 # --------------------------------------------------------------------------
@@ -185,6 +286,56 @@ def verify_code(code: str, stored: str) -> bool:
         return False
 
 
+def needs_rehash(stored: str) -> bool:
+    """True when a stored hash uses fewer iterations than the current policy."""
+    try:
+        return int(stored.split("$")[1]) < PBKDF2_ITERATIONS
+    except Exception:
+        return True
+
+
+# --------------------------------------------------------------------------
+# Brute-force protection (fixed window + lockout, per client IP)
+# --------------------------------------------------------------------------
+def rate_check(ip: str, kind: str) -> int:
+    """Seconds the caller must still wait (0 = allowed to try)."""
+    now = time.time()
+    with LOGIN_ATTEMPTS_LOCK:
+        # bound memory: drop expired entries when the table grows
+        if len(LOGIN_ATTEMPTS) > 1024:
+            for k, s in list(LOGIN_ATTEMPTS.items()):
+                if s["lock_until"] <= now and now - s["start"] >= RATE_WINDOW_SECONDS:
+                    LOGIN_ATTEMPTS.pop(k, None)
+        st = LOGIN_ATTEMPTS.get(f"{kind}:{ip}")
+        if not st:
+            return 0
+        if st["lock_until"] > now:
+            return int(st["lock_until"] - now) + 1
+        if now - st["start"] >= RATE_WINDOW_SECONDS:
+            LOGIN_ATTEMPTS.pop(f"{kind}:{ip}", None)
+        return 0
+
+
+def rate_fail(ip: str, kind: str) -> None:
+    now = time.time()
+    with LOGIN_ATTEMPTS_LOCK:
+        key = f"{kind}:{ip}"
+        st = LOGIN_ATTEMPTS.get(key)
+        if not st or now - st["start"] >= RATE_WINDOW_SECONDS:
+            st = {"start": now, "fails": 0, "lock_until": 0}
+            LOGIN_ATTEMPTS[key] = st
+        st["fails"] += 1
+        if st["fails"] >= RATE_MAX_FAILURES:
+            st["lock_until"] = now + RATE_LOCKOUT_SECONDS
+            st["start"] = now
+            st["fails"] = 0
+
+
+def rate_clear(ip: str, kind: str) -> None:
+    with LOGIN_ATTEMPTS_LOCK:
+        LOGIN_ATTEMPTS.pop(f"{kind}:{ip}", None)
+
+
 def get_setting(conn, key):
     row = conn.execute("SELECT value FROM settings WHERE key = ?", (key,)).fetchone()
     return row["value"] if row else None
@@ -197,8 +348,12 @@ def setup_required():
 
 def create_session(role):
     token = secrets.token_urlsafe(32)
+    now = time.time()
     with SESSIONS_LOCK:
-        SESSIONS[token] = {"role": role, "exp": time.time() + SESSION_TTL_SECONDS}
+        if len(SESSIONS) >= 256:  # hard cap so session memory cannot be exhausted
+            oldest = min(SESSIONS, key=lambda t: SESSIONS[t]["last"])
+            SESSIONS.pop(oldest, None)
+        SESSIONS[token] = {"role": role, "exp": now + SESSION_TTL_SECONDS, "last": now}
     return token
 
 
@@ -210,14 +365,24 @@ def drop_session(token):
 def session_role(token):
     if not token:
         return None
+    now = time.time()
     with SESSIONS_LOCK:
         info = SESSIONS.get(token)
         if not info:
             return None
-        if info["exp"] < time.time():
+        if info["exp"] < now or now - info["last"] > SESSION_IDLE_SECONDS:
             SESSIONS.pop(token, None)
             return None
+        info["last"] = now
         return info["role"]
+
+
+def drop_sessions_except(token):
+    """Revoke every session except the caller's (used when codes change)."""
+    with SESSIONS_LOCK:
+        for t in list(SESSIONS):
+            if t != token:
+                SESSIONS.pop(t, None)
 
 
 # --------------------------------------------------------------------------
@@ -284,17 +449,19 @@ def list_students(conn, grade=None, q=None):
         where.append("grade = ?")
         args.append(grade)
     if q:
-        where.append("(name LIKE ? OR roll3 LIKE ? OR grade LIKE ?)")
+        where.append(f"(name {LIKE_OP} ? OR roll3 {LIKE_OP} ? OR grade {LIKE_OP} ?)")
         args.extend([f"%{q}%", f"%{q}%", f"%{q}%"])
     if where:
         sql += " WHERE " + " AND ".join(where)
-    sql += " ORDER BY CAST(grade AS INTEGER), grade, roll3, name"
+    sql += f" ORDER BY {grade_num()}, grade, roll3, name"
     return [dict(r) for r in conn.execute(sql, args).fetchall()]
 
 
 def attendance_summary(conn, month, grade=None):
+    grade_cond = "s.grade = ?" if grade else "TRUE"
+    args = [f"{month}-%"] + ([grade] if grade else [])
     rows = conn.execute(
-        """
+        f"""
         SELECT s.id, s.name, s.grade, s.roll3,
                SUM(CASE WHEN a.status='present' THEN 1 ELSE 0 END) AS present,
                SUM(CASE WHEN a.status='absent'  THEN 1 ELSE 0 END) AS absent,
@@ -302,11 +469,11 @@ def attendance_summary(conn, month, grade=None):
                COUNT(a.id) AS marked
         FROM students s
         LEFT JOIN attendance a ON a.student_id = s.id AND a.date LIKE ?
-        WHERE (? IS NULL OR s.grade = ?)
+        WHERE {grade_cond}
         GROUP BY s.id
-        ORDER BY CAST(s.grade AS INTEGER), s.grade, s.roll3, s.name
+        ORDER BY {grade_num()}, s.grade, s.roll3, s.name
         """,
-        (f"{month}-%", grade, grade),
+        tuple(args),
     ).fetchall()
     out = []
     for r in rows:
@@ -427,16 +594,38 @@ def student_detail(conn, student_id):
 # --------------------------------------------------------------------------
 class Handler(BaseHTTPRequestHandler):
     server_version = "AttendanceRegister/1.0"
+    protocol_version = "HTTP/1.1"
+    sys_version = ""            # do not advertise the Python version
+    timeout = 60                # drop slow/idle connections (slowloris guard)
+
+    def handle_one_request(self):
+        try:
+            super().handle_one_request()
+        except (TimeoutError, ConnectionAbortedError, ConnectionResetError, BrokenPipeError):
+            # client went away (idle keep-alive close, tab closed, network drop)
+            self.close_connection = True
 
     # ---------- plumbing ----------
     def log_message(self, fmt, *args):
         sys.stderr.write("[%s] %s\n" % (datetime.now().strftime("%H:%M:%S"), fmt % args))
 
-    def _send(self, body: bytes, content_type: str, status: int = 200, extra=None):
+    def _send(self, body: bytes, content_type: str, status: int = 200, extra=None,
+              cache: str = "no-store", csp: str = API_CSP, noindex: bool = False):
         self.send_response(status)
         self.send_header("Content-Type", content_type)
         self.send_header("Content-Length", str(len(body)))
-        self.send_header("Cache-Control", "no-store")
+        self.send_header("Cache-Control", cache)
+        self.send_header("Content-Security-Policy", csp)
+        self.send_header("X-Content-Type-Options", "nosniff")
+        self.send_header("X-Frame-Options", "DENY")
+        self.send_header("Referrer-Policy", "strict-origin-when-cross-origin")
+        self.send_header("Permissions-Policy",
+                         "camera=(), microphone=(), geolocation=(), payment=(), usb=()")
+        self.send_header("Strict-Transport-Security", "max-age=31536000; includeSubDomains")
+        self.send_header("Cross-Origin-Opener-Policy", "same-origin")
+        self.send_header("Cross-Origin-Resource-Policy", "same-origin")
+        if noindex:
+            self.send_header("X-Robots-Tag", "noindex, nofollow")
         for k, v in (extra or {}).items():
             self.send_header(k, v)
         self.end_headers()
@@ -445,16 +634,30 @@ class Handler(BaseHTTPRequestHandler):
         except BrokenPipeError:
             pass
 
-    def send_json(self, data, status=200):
-        self._send(json.dumps(data).encode("utf-8"), "application/json; charset=utf-8", status)
+    def send_json(self, data, status=200, extra=None):
+        self._send(json.dumps(data).encode("utf-8"), "application/json; charset=utf-8",
+                   status, extra=extra, noindex=True)
 
-    def fail(self, message, status=400):
-        self.send_json({"error": message}, status)
+    def fail(self, message, status=400, extra=None):
+        self.send_json({"error": message}, status, extra=extra)
+
+    def client_ip(self):
+        """Best-effort client identity for rate limiting (proxy-aware)."""
+        cf = self.headers.get("CF-Connecting-IP")
+        if cf:
+            return cf.strip()
+        xff = self.headers.get("X-Forwarded-For")
+        if xff:
+            return xff.split(",")[-1].strip()
+        return self.client_address[0]
 
     def body(self):
         length = int(self.headers.get("Content-Length") or 0)
         if length <= 0:
             return {}
+        ctype = (self.headers.get("Content-Type") or "").split(";")[0].strip().lower()
+        if ctype != "application/json":
+            raise ValueError("Content-Type must be application/json.")
         raw = self.rfile.read(length)
         if len(raw) > 2_000_000:
             raise ValueError("Request too large.")
@@ -487,31 +690,6 @@ class Handler(BaseHTTPRequestHandler):
     def do_GET(self):
         self._handle("GET")
 
-    def do_HEAD(self):
-        # Render health checks may use HEAD /. Return the same status as GET
-        # without sending the response body.
-        parsed = urlparse(self.path)
-        path = parsed.path
-        if path.startswith("/api/"):
-            self.send_response(404)
-            self.send_header("Content-Length", "0")
-            self.end_headers()
-            return
-        if path in ("/", ""):
-            path = "/index.html"
-        full = os.path.realpath(os.path.join(STATIC_DIR, path.lstrip("/")))
-        root = os.path.realpath(STATIC_DIR)
-        if not full.startswith(root + os.sep) or not os.path.isfile(full):
-            self.send_response(404)
-            self.send_header("Content-Length", "0")
-            self.end_headers()
-            return
-        ext = os.path.splitext(full)[1].lower()
-        self.send_response(200)
-        self.send_header("Content-Type", MIME.get(ext, "application/octet-stream"))
-        self.send_header("Content-Length", str(os.path.getsize(full)))
-        self.end_headers()
-
     def do_POST(self):
         self._handle("POST")
 
@@ -539,12 +717,6 @@ class Handler(BaseHTTPRequestHandler):
 
     # ---------- static ----------
     def serve_static(self, path):
-        # Google Search Console HTML verification file.
-        # Keep this at the site root: /google3752f64b9ca69282.html
-        if path == "/google3752f64b9ca69282.html":
-            body = b"google-site-verification: google3752f64b9ca69282.html"
-            self._send(body, "text/html; charset=utf-8", 200, {"Cache-Control": "no-store"})
-            return
         if path in ("/", ""):
             path = "/index.html"
         full = os.path.realpath(os.path.join(STATIC_DIR, path.lstrip("/")))
@@ -555,8 +727,25 @@ class Handler(BaseHTTPRequestHandler):
             self.fail("Not found.", 404)
             return
         ext = os.path.splitext(full)[1].lower()
+        # Cache static assets so repeat visits skip re-downloads; keep the
+        # HTML shell and all API responses fresh.
+        if ext == ".woff2":
+            cache = "public, max-age=604800"
+        elif ext in (".css", ".js"):
+            cache = "public, max-age=300"
+        else:
+            cache = "no-store"
+        if ext == ".html":
+            csp = HTML_CSP
+        elif ext in (".png", ".jpg", ".ico", ".svg", ".woff2"):
+            # image responses may be wrapped in a browser image-viewer
+            # document, which styles itself with a small inline style
+            csp = "default-src 'none'; style-src 'unsafe-inline'"
+        else:
+            csp = "default-src 'none'"
         with open(full, "rb") as fh:
-            self._send(fh.read(), MIME.get(ext, "application/octet-stream"))
+            self._send(fh.read(), MIME.get(ext, "application/octet-stream"),
+                       cache=cache, csp=csp)
 
     # ---------- API ----------
     def api(self, method, path, qs):
@@ -570,35 +759,53 @@ class Handler(BaseHTTPRequestHandler):
             return
 
         if method == "POST" and path == "/api/setup":
+            ip = self.client_ip()
+            wait = rate_check(ip, "setup")
+            if wait:
+                self.fail(f"Too many attempts. Try again in {wait} seconds.", 429,
+                          extra={"Retry-After": str(wait)})
+                return
+            rate_fail(ip, "setup")
             if not setup_required():
                 self.fail("Setup already completed.", 403)
                 return
             b = self.body()
             admin = text(b.get("admin_code"), "Admin code", 4, 64)
             teacher = text(b.get("teacher_code"), "Teacher code", 4, 64)
-            observer = text(b.get("observer_code"), "Observer code", 4, 64)
-            if admin == teacher or admin == observer or teacher == observer:
-                raise ValueError("All three codes must be different.")
+            if admin == teacher:
+                raise ValueError("The two codes must be different.")
             with db_conn() as c:
                 c.execute("INSERT INTO settings(key, value) VALUES(?,?)", ("admin_hash", hash_code(admin)))
                 c.execute("INSERT INTO settings(key, value) VALUES(?,?)", ("teacher_hash", hash_code(teacher)))
-                c.execute("INSERT INTO settings(key, value) VALUES(?,?)", ("observer_hash", hash_code(observer)))
+            rate_clear(ip, "setup")
             self.send_json({"ok": True, "token": create_session("admin"), "role": "admin"})
             return
 
         if method == "POST" and path == "/api/login":
+            ip = self.client_ip()
+            wait = rate_check(ip, "login")
+            if wait:
+                self.fail(f"Too many attempts. Try again in {wait} seconds.", 429,
+                          extra={"Retry-After": str(wait)})
+                return
+            rate_fail(ip, "login")
             b = self.body()
             role = b.get("role")
-            if role not in ("admin", "teacher", "observer"):
+            if role not in ("admin", "teacher"):
                 raise ValueError("Choose admin or teacher.")
             code = text(b.get("code"), "Code", 1, 64)
-            key = "admin_hash" if role == "admin" else ("teacher_hash" if role == "teacher" else "observer_hash")
+            key = "admin_hash" if role == "admin" else "teacher_hash"
             with db_conn() as c:
                 stored = get_setting(c, key)
             if not stored or not verify_code(code, stored):
                 time.sleep(0.4)
                 self.fail("Incorrect code.", 401)
                 return
+            if needs_rehash(stored):
+                # transparently upgrade legacy hashes to the current work factor
+                with db_conn() as c:
+                    c.execute("UPDATE settings SET value = ? WHERE key = ?", (hash_code(code), key))
+            rate_clear(ip, "login")
             self.send_json({"ok": True, "role": role, "token": create_session(role)})
             return
 
@@ -630,14 +837,13 @@ class Handler(BaseHTTPRequestHandler):
                 updates["admin_hash"] = hash_code(text(b["admin_code"], "Admin code", 4, 64))
             if b.get("teacher_code"):
                 updates["teacher_hash"] = hash_code(text(b["teacher_code"], "Teacher code", 4, 64))
-            if b.get("observer_code"):
-                updates["observer_hash"] = hash_code(text(b["observer_code"], "Observer code", 4, 64))
             if not updates:
                 raise ValueError("Provide a new admin code, a new teacher code, or both.")
             with db_conn() as c:
                 for k, v in updates.items():
                     c.execute("INSERT INTO settings(key, value) VALUES(?,?) "
                               "ON CONFLICT(key) DO UPDATE SET value = excluded.value", (k, v))
+            drop_sessions_except(self._token())  # old credentials -> all other sessions die
             self.send_json({"ok": True})
             return
 
@@ -647,7 +853,8 @@ class Handler(BaseHTTPRequestHandler):
                 with db_conn() as c:
                     students = list_students(c, grade=q("grade"), q=q("q"))
                     grades = [r["grade"] for r in c.execute(
-                        "SELECT DISTINCT grade FROM students ORDER BY CAST(grade AS INTEGER), grade")]
+                        f"SELECT grade FROM (SELECT DISTINCT grade FROM students) AS g "
+                        f"ORDER BY {grade_num('g.grade')}, g.grade")]
                 self.send_json({"students": students, "grades": grades})
                 return
             if method == "POST":
@@ -662,11 +869,12 @@ class Handler(BaseHTTPRequestHandler):
                     raise ValueError("Roll number must be exactly the last 3 digits (000-999).")
                 try:
                     with db_conn() as c:
-                        cur = c.execute(
-                            "INSERT INTO students(name, grade, roll3, created_at) VALUES(?,?,?,?)",
+                        student_id = insert_id(
+                            c, "INSERT INTO students(name, grade, roll3, created_at) VALUES(?,?,?,?)",
                             (name, grade, roll3, datetime.now().isoformat(timespec="seconds")))
-                        student_id = cur.lastrowid
-                except sqlite3.IntegrityError:
+                except Exception as e:
+                    if not is_unique_violation(e):
+                        raise
                     raise ValueError(f"Grade {grade} already has a student with roll {roll3}.")
                 self.send_json({"ok": True, "id": student_id})
                 return
@@ -739,9 +947,6 @@ class Handler(BaseHTTPRequestHandler):
                 self.send_json({"month": m, "tests": tests})
                 return
             if method == "POST":
-                if role not in ("admin", "teacher"):
-                    self.fail("Observer access is read-only.", 403)
-                    return
                 b = self.body()
                 name = text(b.get("name"), "Test name", 2, 60)
                 m = month_of(b.get("month"))
@@ -755,10 +960,9 @@ class Handler(BaseHTTPRequestHandler):
                 if test_date:
                     test_date = date_of(test_date)
                 with db_conn() as c:
-                    cur = c.execute(
-                        "INSERT INTO tests(name, month, max_score, test_date, created_at) VALUES(?,?,?,?,?)",
+                    tid = insert_id(
+                        c, "INSERT INTO tests(name, month, max_score, test_date, created_at) VALUES(?,?,?,?,?)",
                         (name, m, max_score, test_date, datetime.now().isoformat(timespec="seconds")))
-                    tid = cur.lastrowid
                 self.send_json({"ok": True, "id": tid})
                 return
             if method == "DELETE":
@@ -788,9 +992,6 @@ class Handler(BaseHTTPRequestHandler):
                 self.send_json({"test": dict(t), "students": students})
                 return
             if method == "POST":
-                if role not in ("admin", "teacher"):
-                    self.fail("Observer access is read-only.", 403)
-                    return
                 b = self.body()
                 tid = int(b.get("test_id") or 0)
                 entries = b.get("entries")
@@ -868,7 +1069,10 @@ class Handler(BaseHTTPRequestHandler):
 # --------------------------------------------------------------------------
 def main():
     init_db()
-    reset_admin_from_environment()
+    try:
+        os.chmod(DB_PATH, 0o600)   # best-effort: owner-only access to the data file
+    except OSError:
+        pass
     server = ThreadingHTTPServer((HOST, PORT), Handler)
     server.daemon_threads = True
     print("=" * 62)
