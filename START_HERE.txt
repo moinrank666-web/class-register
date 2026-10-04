@@ -1,0 +1,20 @@
+CLASS REGISTER - QUICK START
+
+LOCAL COMPUTER
+1. Make sure Python 3 is installed.
+2. Double-click START_CLASS_REGISTER_PORTABLE.bat.
+3. Open http://127.0.0.1:8765
+
+RENDER
+1. Upload the CONTENTS of this folder to the ROOT of your GitHub repository.
+2. The GitHub repository must contain server.py and static/index.html.
+3. In Render create a Web Service from that GitHub repository.
+4. Build Command: python -m py_compile server.py
+5. Start Command: python server.py
+6. Environment variable: ATTENDANCE_HOST=0.0.0.0
+7. Render supplies PORT automatically.
+
+IMPORTANT
+The included attendance.db is local SQLite data. Render's free filesystem is not
+persistent, so do not rely on it as the only storage for real attendance records.
+Do not put real student data in a public GitHub repository.
