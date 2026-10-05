@@ -8,18 +8,27 @@ const $$ = (s, el = document) => Array.from(el.querySelectorAll(s));
 const esc = v => String(v ?? '').replace(/[&<>"']/g, c =>
   ({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;' }[c]));
 
-const MONTH_NAMES = ['January','February','March','April','May','June','July',
-  'August','September','October','November','December'];
+const monthNames = () => (window.MONTHS[getLang()] || window.MONTHS.en);
 const pad = n => String(n).padStart(2, '0');
 const todayISO  = () => { const d = new Date(); return `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}`; };
 const thisMonth = () => todayISO().slice(0, 7);
-const monthLabel = m => { const [y, mm] = String(m).split('-'); return `${MONTH_NAMES[Number(mm)-1] || ''} ${y}`; };
+const monthLabel = m => {
+  const [y, mm] = String(m).split('-'); const i = Number(mm) - 1;
+  return `${monthNames()[i] || window.MONTHS.en[i] || ''} ${y}`;
+};
 const AVATAR = ['#7C5CFC','#FF6B9D','#2EC4B6','#F2A93B','#FF8A5B','#5B8DEF','#A78BFA','#1FA598','#E13A5B'];
 const avColor = key => AVATAR[String(key).split('').reduce((a,c)=>a + c.charCodeAt(0), 0) % AVATAR.length];
 const initials = name => String(name || '?').trim().split(/\s+/).slice(0,2).map(w => w[0].toUpperCase()).join('');
 const fmt = v => (v === null || v === undefined || v === '') ? '—' : (Math.round(v*10)/10).toString().replace(/\.0$/, '');
 const pctText = v => (v === null || v === undefined) ? '—' : `${fmt(v)}%`;
 const debounce = (fn, ms) => { let t; return (...a) => { clearTimeout(t); t = setTimeout(() => fn(...a), ms); }; };
+
+/* Server errors arrive in English — map them (and rate-limit countdowns) to the active language. */
+function trErr(msg) {
+  const m = /Try again in (\d+) seconds/.exec(String(msg || ''));
+  if (m) return T('Too many attempts. Try again in {n} seconds.', { n: m[1] });
+  return T(msg || '');
+}
 
 const App = {
   token: sessionStorage.getItem('cr_token') || null,
@@ -45,8 +54,8 @@ async function api(path, { method = 'GET', body } = {}) {
   });
   let data = {};
   try { data = await res.json(); } catch (_) { /* non-JSON */ }
-  if (res.status === 401) { await signOut(); throw new Error(data.error || 'Session expired — please sign in again.'); }
-  if (!res.ok) throw new Error(data.error || `Request failed (${res.status})`);
+  if (res.status === 401) { await signOut(); throw new Error(data.error ? trErr(data.error) : T('api.401')); }
+  if (!res.ok) throw new Error(data.error ? trErr(data.error) : T('api.fail', { status: res.status }));
   return data;
 }
 
@@ -64,7 +73,7 @@ function openModal({ title, body = '', footer = '', wide = false }) {
   $('#modal-root').innerHTML = `
     <div class="modal-back" id="modal-back">
       <div class="modal ${wide ? 'wide' : ''}" role="dialog" aria-modal="true">
-        <div class="modal-head"><h3>${title}</h3><button class="x-btn" id="modal-x" aria-label="Close">✕</button></div>
+        <div class="modal-head"><h3>${title}</h3><button class="x-btn" id="modal-x" aria-label="${T('modal.close')}">✕</button></div>
         <div class="modal-body" id="modal-body">${body}</div>
         ${footer ? `<div class="modal-foot">${footer}</div>` : ''}
       </div>
@@ -86,6 +95,18 @@ async function signOut() {
   renderLogin();
 }
 
+/* Language toggle — re-renders whatever screen is showing, in the new language. */
+function bindLang() {
+  const b = $('#btn-lang'); if (!b) return;
+  b.onclick = () => {
+    setLang(nextLang());
+    closeModal();
+    if ($('#nav')) renderShell();
+    else if ($('#setup-form')) renderSetup();
+    else if ($('#login-form')) renderLogin();
+  };
+}
+
 function authShell(inner) {
   $('#app').innerHTML = `
     <div class="auth-wrap">
@@ -93,38 +114,40 @@ function authShell(inner) {
         <div class="auth-side">
           <div class="brand-mini" style="margin:0">
             <div class="m">📚</div>
-            <div><b style="color:#fff">Class Register</b><span style="color:rgba(255,255,255,.85)">Attendance &amp; Performance</span></div>
+            <div><b style="color:#fff">Class Register</b><span style="color:rgba(255,255,255,.85)">${T('brand.sub')}</span></div>
           </div>
-          <h1>Every name,<br>every mark —<br>in one tidy place.</h1>
-          <p>A password-protected register for student attendance and monthly test performance.</p>
+          <h1>${T('hero.h1')}</h1>
+          <p>${T('hero.p')}</p>
           <ul class="auth-points">
-            <li>🗓️ <span>Grade + last-3-digit roll, kept in a neat sortable table</span></li>
-            <li>🔐 <span>Two separate codes: one for you (admin), one for the teacher</span></li>
-            <li>📊 <span>Test scores auto-allotted per student with totals, grades &amp; ranks</span></li>
+            <li>🗓️ <span>${T('hero.point1')}</span></li>
+            <li>🔐 <span>${T('hero.point2')}</span></li>
+            <li>📊 <span>${T('hero.point3')}</span></li>
           </ul>
+          <button class="lang-pill on-dark" id="btn-lang">🌐 ${esc(nextLangLabel())}</button>
         </div>
         <div class="auth-form">${inner}</div>
       </div>
     </div>`;
+  bindLang();
 }
 
 function renderSetup() {
   authShell(`
-    <div class="brand-mini"><div class="m">✨</div><div><b>First-time setup</b><span>Create the two codes that open this register</span></div></div>
-    <div class="notice">🔐 These codes are stored as salted hashes — <b>they cannot be recovered</b>. Write them down somewhere safe.</div>
+    <div class="brand-mini"><div class="m">✨</div><div><b>${T('setup.brand')}</b><span>${T('setup.brand.sub')}</span></div></div>
+    <div class="notice">${T('setup.notice')}</div>
     <div id="auth-err"></div>
     <form id="setup-form" novalidate>
-      <div class="field"><label>YOUR admin code</label>
+      <div class="field"><label>${T('setup.admin.label')}</label>
         <input class="code-input" type="password" id="admin-code" autocomplete="new-password" placeholder="••••" minlength="4" required>
-        <span class="hint">Min 4 characters — manages students &amp; attendance</span></div>
-      <div class="field"><label>Confirm admin code</label>
+        <span class="hint">${T('setup.admin.hint')}</span></div>
+      <div class="field"><label>${T('setup.admin2')}</label>
         <input class="code-input" type="password" id="admin-code2" autocomplete="new-password" placeholder="••••" required></div>
-      <div class="field"><label>TEACHER code</label>
+      <div class="field"><label>${T('setup.teacher.label')}</label>
         <input class="code-input" type="password" id="teacher-code" autocomplete="new-password" placeholder="••••" minlength="4" required>
-        <span class="hint">Must be different — enters monthly test scores</span></div>
-      <div class="field"><label>Confirm teacher code</label>
+        <span class="hint">${T('setup.teacher.hint')}</span></div>
+      <div class="field"><label>${T('setup.teacher2')}</label>
         <input class="code-input" type="password" id="teacher-code2" autocomplete="new-password" placeholder="••••" required></div>
-      <button class="btn btn-primary" style="width:100%;justify-content:center" type="submit">Create codes &amp; open register →</button>
+      <button class="btn btn-primary" style="width:100%;justify-content:center" type="submit">${T('setup.submit')}</button>
     </form>`);
   $('#setup-form').addEventListener('submit', async e => {
     e.preventDefault();
@@ -133,16 +156,16 @@ function renderSetup() {
     const box = $('#auth-err');
     box.innerHTML = '';
     const err = m => { box.innerHTML = `<div class="alert">${esc(m)}</div>`; };
-    if (a.length < 4 || t.length < 4) return err('Each code must be at least 4 characters.');
-    if (a !== a2) return err('The two admin code entries do not match.');
-    if (t !== t2) return err('The two teacher code entries do not match.');
-    if (a === t)  return err('The admin and teacher codes must be different.');
+    if (a.length < 4 || t.length < 4) return err(T('setup.err.len'));
+    if (a !== a2) return err(T('setup.err.aMismatch'));
+    if (t !== t2) return err(T('setup.err.tMismatch'));
+    if (a === t)  return err(T('setup.err.same'));
     try {
       const r = await api('/api/setup', { method: 'POST', body: { admin_code: a, teacher_code: t } });
       App.token = r.token; App.role = r.role;
       sessionStorage.setItem('cr_token', r.token);
       sessionStorage.setItem('cr_role', r.role);
-      toast('Register created — welcome!');
+      toast(T('toast.created'));
       renderShell();
     } catch (ex) { err(ex.message); }
   });
@@ -150,30 +173,28 @@ function renderSetup() {
 
 function renderLogin(message = '') {
   authShell(`
-    <div class="brand-mini"><div class="m">🔐</div><div><b>Sign in</b><span>Enter the code for your role</span></div></div>
+    <div class="brand-mini"><div class="m">🔐</div><div><b>${T('login.brand')}</b><span>${T('login.brand.sub')}</span></div></div>
     <div id="auth-err">${message ? `<div class="alert">${esc(message)}</div>` : ''}</div>
     <div class="role-tabs" id="role-tabs">
-      <button type="button" data-role="admin" class="on">🛡️ Admin</button>
-      <button type="button" data-role="teacher">👩‍🏫 Teacher</button>
+      <button type="button" data-role="admin" class="on">${T('role.admin.tab')}</button>
+      <button type="button" data-role="teacher">${T('role.teacher.tab')}</button>
     </div>
     <form id="login-form" novalidate>
-      <div class="field"><label id="code-label">Admin code</label>
+      <div class="field"><label id="code-label">${T('login.label.admin')}</label>
         <input class="code-input" type="password" id="login-code" autocomplete="current-password" placeholder="••••" required>
-        <span class="hint" id="code-hint">Manages the student roster and attendance</span></div>
-      <button class="btn btn-primary" style="width:100%;justify-content:center" type="submit">Open register →</button>
+        <span class="hint" id="code-hint">${T('login.hint.admin')}</span></div>
+      <button class="btn btn-primary" style="width:100%;justify-content:center" type="submit">${T('login.submit')}</button>
     </form>
     <p class="muted" style="font-size:12.6px;margin-top:18px;text-align:center">
-      Lost a code? It can only be reset while signed in as admin.
+      ${T('login.lost')}
     </p>`);
   let role = 'admin';
   $('#role-tabs').addEventListener('click', e => {
     const b = e.target.closest('button[data-role]'); if (!b) return;
     role = b.dataset.role;
     $$('#role-tabs button').forEach(x => x.classList.toggle('on', x === b));
-    $('#code-label').textContent = role === 'admin' ? 'Admin code' : 'Teacher code';
-    $('#code-hint').textContent  = role === 'admin'
-      ? 'Manages the student roster and attendance'
-      : 'Enters monthly test scores and reads reports';
+    $('#code-label').textContent = role === 'admin' ? T('login.label.admin') : T('login.label.teacher');
+    $('#code-hint').textContent  = role === 'admin' ? T('login.hint.admin') : T('login.hint.teacher');
     $('#login-code').focus();
   });
   $('#login-form').addEventListener('submit', async e => {
@@ -185,7 +206,7 @@ function renderLogin(message = '') {
       App.token = r.token; App.role = r.role;
       sessionStorage.setItem('cr_token', r.token);
       sessionStorage.setItem('cr_role', r.role);
-      toast(`Signed in as ${r.role}`);
+      toast(T('toast.signedin', { role: T('role.' + r.role + '.name') }));
       renderShell();
     } catch (ex) {
       $('#auth-err').innerHTML = `<div class="alert">${esc(ex.message)}</div>`;
@@ -198,10 +219,10 @@ function renderLogin(message = '') {
 
 /* ------------------------------ shell ------------------------------ */
 const NAV = [
-  { id: 'students',   label: 'Students',    icon: '🎓' },
-  { id: 'attendance', label: 'Attendance',  icon: '🗓️' },
-  { id: 'scores',     label: 'Test Scores', icon: '📝' },
-  { id: 'report',     label: 'Reports',     icon: '📊' },
+  { id: 'students',   key: 'nav.students',   icon: '🎓' },
+  { id: 'attendance', key: 'nav.attendance', icon: '🗓️' },
+  { id: 'scores',     key: 'nav.scores',     icon: '📝' },
+  { id: 'report',     key: 'nav.reports',    icon: '📊' },
 ];
 
 function renderShell() {
@@ -216,21 +237,23 @@ function renderShell() {
           </div>
         </div>
         <div class="hero-actions">
-          <span class="role-chip">${App.role === 'admin' ? '🛡️ Admin access' : '👩‍🏫 Teacher access'}</span>
-          ${App.role === 'admin' ? '<button class="hero-btn" id="btn-settings">⚙️ Codes</button>' : ''}
-          <button class="hero-btn" id="btn-logout">Sign out</button>
+          <span class="role-chip">${App.role === 'admin' ? T('role.admin.chip') : T('role.teacher.chip')}</span>
+          <button class="hero-btn lang-btn" id="btn-lang" title="Language">🌐 ${esc(nextLangLabel())}</button>
+          ${App.role === 'admin' ? `<button class="hero-btn" id="btn-settings">${T('shell.codes')}</button>` : ''}
+          <button class="hero-btn" id="btn-logout">${T('shell.signout')}</button>
         </div>
       </div>
     </header>
     <div class="nav-wrap">
       <nav class="nav" id="nav">
-        ${NAV.map(n => `<button data-view="${n.id}"><span>${n.icon}</span>${n.label}</button>`).join('')}
+        ${NAV.map(n => `<button data-view="${n.id}"><span>${n.icon}</span>${T(n.key)}</button>`).join('')}
       </nav>
     </div>
     <main class="page" id="view"><div class="boot"><div class="boot-logo">⏳</div></div></main>`;
 
   $('#btn-logout').onclick = signOut;
   if ($('#btn-settings')) $('#btn-settings').onclick = openCodeModal;
+  bindLang();
   $('#nav').addEventListener('click', e => {
     const b = e.target.closest('button[data-view]'); if (b) navigate(b.dataset.view);
   });
@@ -241,7 +264,7 @@ function navigate(view) {
   App.view = view;
   $$('#nav button').forEach(b => b.classList.toggle('active', b.dataset.view === view));
   const v = $('#view');
-  v.innerHTML = '<div class="boot"><div class="boot-logo">⏳</div><p>Loading…</p></div>';
+  v.innerHTML = `<div class="boot"><div class="boot-logo">⏳</div><p>${T('shell.loading')}</p></div>`;
   ({ students: renderStudents, attendance: renderAttendance, scores: renderScores, report: renderReport }[view])();
 }
 
@@ -250,28 +273,28 @@ const stat = (cls, label, num, note) => `
   <div class="stat-num">${num}</div>${note ? `<div class="stat-note">${note}</div>` : ''}</div>`;
 
 function gradeOptions(grades, sel) {
-  return `<option value="">All grades</option>` +
+  return `<option value="">${T('options.all')}</option>` +
     grades.map(g => `<option value="${esc(g)}" ${g === sel ? 'selected' : ''}>${esc(g)}</option>`).join('');
 }
 
 async function openCodeModal() {
   openModal({
-    title: '⚙️ Change access codes',
+    title: T('codes.title'),
     body: `
-      <div class="notice">Both codes must be at least 4 characters and different from each other. Leave a field blank to keep the current code.</div>
+      <div class="notice">${T('codes.notice')}</div>
       <div id="code-err"></div>
-      <div class="field"><label>New admin code</label><input class="code-input" type="password" id="new-admin" placeholder="leave blank to keep"></div>
-      <div class="field"><label>New teacher code</label><input class="code-input" type="password" id="new-teacher" placeholder="leave blank to keep"></div>`,
-    footer: `<button class="btn btn-ghost" id="m-cancel">Cancel</button>
-             <button class="btn btn-primary" id="save-codes">Save codes</button>`,
+      <div class="field"><label>${T('codes.newAdmin')}</label><input class="code-input" type="password" id="new-admin" placeholder="${T('codes.keep')}"></div>
+      <div class="field"><label>${T('codes.newTeacher')}</label><input class="code-input" type="password" id="new-teacher" placeholder="${T('codes.keep')}"></div>`,
+    footer: `<button class="btn btn-ghost" id="m-cancel">${T('btn.cancel')}</button>
+             <button class="btn btn-primary" id="save-codes">${T('codes.save')}</button>`,
   });
   $('#m-cancel').onclick = closeModal;
   $('#save-codes').onclick = async () => {
     const body = { admin_code: $('#new-admin').value.trim(), teacher_code: $('#new-teacher').value.trim() };
-    if (!body.admin_code && !body.teacher_code) return $('#code-err').innerHTML = '<div class="alert">Enter at least one new code.</div>';
+    if (!body.admin_code && !body.teacher_code) return $('#code-err').innerHTML = `<div class="alert">${T('codes.err.one')}</div>`;
     try {
       await api('/api/codes', { method: 'POST', body });
-      closeModal(); toast('Codes updated');
+      closeModal(); toast(T('toast.codes'));
     } catch (ex) { $('#code-err').innerHTML = `<div class="alert">${esc(ex.message)}</div>`; }
   };
 }
@@ -288,26 +311,26 @@ async function renderStudents() {
 
   $('#view').innerHTML = `
     <div class="section-head">
-      <div><h2>🎓 Student roster</h2><p>Name · grade · last three digits of the roll number — sorted by grade, then roll.</p></div>
-      ${isAdmin ? '<button class="btn btn-primary no-print" id="btn-add">＋ Add student</button>' : ''}
+      <div><h2>${T('stu.title')}</h2><p>${T('stu.sub')}</p></div>
+      ${isAdmin ? `<button class="btn btn-primary no-print" id="btn-add">${T('stu.add')}</button>` : ''}
     </div>
 
     <div class="grid grid-3" style="margin-bottom:18px">
-      ${stat('v', 'Students', students.length, 'in the register')}
-      ${stat('p', 'Grades', grades.length, 'distinct classes')}
-      ${stat('m', 'Added this month', newThisMonth, monthLabel(thisMonth()))}
+      ${stat('v', T('stat.students'), students.length, T('stat.inRegister'))}
+      ${stat('p', T('stat.grades'), grades.length, T('stat.classes'))}
+      ${stat('m', T('stat.addedMonth'), newThisMonth, monthLabel(thisMonth()))}
     </div>
 
     <div class="card">
       <div class="toolbar no-print">
-        <input class="input" id="f-q" placeholder="🔍 Search name or roll…" value="${esc(f.q)}">
+        <input class="input" id="f-q" placeholder="${T('stu.search')}" value="${esc(f.q)}">
         <select class="input" id="f-grade">${gradeOptions(grades, f.grade)}</select>
         <div class="spacer"></div>
-        <span class="muted" style="font-size:13px">${students.length} shown</span>
+        <span class="muted" style="font-size:13px">${T('stu.shown', { n: students.length })}</span>
       </div>
       <div class="table-wrap">
         <table>
-          <thead><tr><th style="width:90px">Grade</th><th style="width:120px">Roll No.</th><th>Student name</th><th style="width:170px">Added</th><th class="no-print" style="width:170px"></th></tr></thead>
+          <thead><tr><th style="width:90px">${T('th.grade')}</th><th style="width:120px">${T('th.roll')}</th><th>${T('th.name')}</th><th style="width:170px">${T('th.added')}</th><th class="no-print" style="width:170px"></th></tr></thead>
           <tbody id="stu-body">
             ${students.length ? students.map(s => `
               <tr class="clickable" data-id="${s.id}">
@@ -316,13 +339,13 @@ async function renderStudents() {
                 <td class="name-cell">${esc(s.name)}</td>
                 <td class="muted">${esc((s.created_at || '').slice(0, 10))}</td>
                 <td class="no-print" style="text-align:right;white-space:nowrap">
-                  <button class="btn btn-sm btn-ghost" data-act="view">View</button>
-                  ${isAdmin ? `<button class="btn btn-sm btn-danger" data-act="del">Remove</button>` : ''}
+                  <button class="btn btn-sm btn-ghost" data-act="view">${T('btn.view')}</button>
+                  ${isAdmin ? `<button class="btn btn-sm btn-danger" data-act="del">${T('btn.remove')}</button>` : ''}
                 </td>
               </tr>`).join('') : ''}
           </tbody>
         </table>
-        ${students.length ? '' : `<div class="empty"><span class="emoji">🎒</span><b>No students yet</b>${isAdmin ? 'Use “Add student” to start the roster.' : 'Ask the admin to add students.'}</div>`}
+        ${students.length ? '' : `<div class="empty"><span class="emoji">🎒</span><b>${T('stu.empty')}</b>${isAdmin ? T('stu.emptyUse') : T('stu.emptyAsk')}</div>`}
       </div>
     </div>`;
 
@@ -340,13 +363,13 @@ async function renderStudents() {
     if (btn && btn.dataset.act === 'del') {
       const name = row.querySelector('.name-cell').textContent;
       openModal({
-        title: 'Remove student?',
-        body: `<p style="margin:0;line-height:1.6">This permanently deletes <b>${esc(name)}</b> together with their attendance and scores.</p>`,
-        footer: `<button class="btn btn-ghost" id="m-cancel">Cancel</button><button class="btn btn-danger" id="m-ok">Remove</button>`,
+        title: T('modal.removeStu'),
+        body: `<p style="margin:0;line-height:1.6">${T('modal.removeBody', { name: esc(name) })}</p>`,
+        footer: `<button class="btn btn-ghost" id="m-cancel">${T('btn.cancel')}</button><button class="btn btn-danger" id="m-ok">${T('btn.remove')}</button>`,
       });
       $('#m-cancel').onclick = closeModal;
       $('#m-ok').onclick = async () => {
-        try { await api(`/api/students?id=${id}`, { method: 'DELETE' }); closeModal(); toast('Student removed'); renderStudents(); }
+        try { await api(`/api/students?id=${id}`, { method: 'DELETE' }); closeModal(); toast(T('toast.stuRemoved')); renderStudents(); }
         catch (ex) { warn(ex.message); }
       };
       return;
@@ -357,29 +380,29 @@ async function renderStudents() {
 
 function openAddStudent() {
   openModal({
-    title: '＋ Add student',
+    title: T('add.title'),
     body: `
       <div id="add-err"></div>
-      <div class="field"><label>Student name</label><input id="s-name" placeholder="e.g. Ayesha Khan" autocomplete="off"></div>
+      <div class="field"><label>${T('add.name')}</label><input id="s-name" placeholder="e.g. Ayesha Khan" autocomplete="off"></div>
       <div class="row">
-        <div class="field"><label>Grade / class</label>
+        <div class="field"><label>${T('add.grade')}</label>
           <input id="s-grade" list="grade-list" placeholder="e.g. 5" autocomplete="off">
           <datalist id="grade-list">${['1','2','3','4','5','6','7','8','9','10','11','12'].map(g => `<option value="${g}">`).join('')}</datalist>
         </div>
-        <div class="field"><label>Last 3 digits of roll no.</label>
+        <div class="field"><label>${T('add.roll')}</label>
           <input id="s-roll" inputmode="numeric" maxlength="3" placeholder="042" autocomplete="off">
-          <span class="hint">Exactly 3 digits (000–999)</span>
+          <span class="hint">${T('add.rollHint')}</span>
         </div>
       </div>
-      <div class="notice" id="roll-preview" style="margin-top:4px">Roll will appear as <b>—</b></div>`,
-    footer: `<button class="btn btn-ghost" id="m-cancel">Cancel</button><button class="btn btn-primary" id="m-save">Add student</button>`,
+      <div class="notice" id="roll-preview" style="margin-top:4px">${T('add.preview', { roll: '<b>—</b>' })}</div>`,
+    footer: `<button class="btn btn-ghost" id="m-cancel">${T('btn.cancel')}</button><button class="btn btn-primary" id="m-save">${T('stu.add')}</button>`,
   });
 
   const roll = $('#s-roll'), grade = $('#s-grade');
   const preview = () => {
     const r = roll.value.replace(/\D/g, '').slice(0, 3);
     roll.value = r;
-    $('#roll-preview').innerHTML = `Roll will appear as <b>${esc(grade.value.trim() || '—')}-${esc(r || '•••')}</b>`;
+    $('#roll-preview').innerHTML = T('add.preview', { roll: `<b>${esc(grade.value.trim() || '—')}-${esc(r || '•••')}</b>` });
   };
   roll.addEventListener('input', preview);
   grade.addEventListener('input', preview);
@@ -388,10 +411,10 @@ function openAddStudent() {
   $('#m-save').onclick = async () => {
     const body = { name: $('#s-name').value, grade: grade.value, roll3: roll.value };
     $('#add-err').innerHTML = '';
-    if (body.roll3.length !== 3) { $('#add-err').innerHTML = '<div class="alert">Enter exactly 3 digits for the roll number.</div>'; roll.focus(); return; }
+    if (body.roll3.length !== 3) { $('#add-err').innerHTML = `<div class="alert">${T('add.err.roll')}</div>`; roll.focus(); return; }
     try {
       await api('/api/students', { method: 'POST', body });
-      closeModal(); toast(`${body.name} added`); renderStudents();
+      closeModal(); toast(T('toast.added', { name: body.name })); renderStudents();
     } catch (ex) { $('#add-err').innerHTML = `<div class="alert">${esc(ex.message)}</div>`; }
   };
 }
@@ -415,12 +438,12 @@ async function renderAttendance() {
 
   $('#view').innerHTML = `
     <div class="section-head">
-      <div><h2>🗓️ Daily attendance</h2><p>Tap a status for each student, then save. ${isAdmin ? '' : 'Read-only for the teacher code.'}</p></div>
+      <div><h2>${T('att.title')}</h2><p>${T('att.sub')} ${isAdmin ? '' : T('att.subTeacher')}</p></div>
     </div>
 
     <div class="card">
       <div class="card-title">
-        <h3>Mark for <span id="day-label">${esc(f.date)}</span></h3>
+        <h3>${T('att.markFor')} <span id="day-label">${esc(f.date)}</span></h3>
         <div class="month-nav no-print">
           <input type="date" class="input" id="a-date" value="${esc(f.date)}">
           <select class="input" id="a-grade">${gradeOptions(grades, f.grade)}</select>
@@ -428,29 +451,29 @@ async function renderAttendance() {
       </div>
       ${isAdmin ? `
       <div class="toolbar no-print" style="margin-bottom:6px">
-        <button class="btn btn-sm btn-mint" data-all="present">✅ All present</button>
-        <button class="btn btn-sm btn-danger" data-all="absent">❌ All absent</button>
-        <button class="btn btn-sm btn-ghost" data-all="clear">↺ Clear</button>
+        <button class="btn btn-sm btn-mint" data-all="present">${T('att.allPresent')}</button>
+        <button class="btn btn-sm btn-danger" data-all="absent">${T('att.allAbsent')}</button>
+        <button class="btn btn-sm btn-ghost" data-all="clear">${T('att.clear')}</button>
         <div class="spacer"></div>
         <span class="muted" id="tally" style="font-size:13.2px"></span>
-        <button class="btn btn-primary" id="btn-save-att">💾 Save attendance</button>
+        <button class="btn btn-primary" id="btn-save-att">${T('att.save')}</button>
       </div>` : ''}
       <div id="mark-list">
         ${day.students.length ? day.students.map(s => markRow(s)).join('') : ''}
       </div>
-      ${day.students.length ? '' : `<div class="empty"><span class="emoji">🏫</span><b>No students in this filter</b>Add students or change the grade filter.</div>`}
+      ${day.students.length ? '' : `<div class="empty"><span class="emoji">🏫</span><b>${T('att.empty')}</b>${T('att.emptyHint')}</div>`}
     </div>
 
     <div class="card">
       <div class="card-title">
-        <h3>Monthly summary</h3>
+        <h3>${T('att.summary')}</h3>
         <div class="month-nav no-print">
           <input type="month" class="input" id="a-month" value="${esc(f.month)}">
         </div>
       </div>
       <div class="table-wrap">
         <table>
-          <thead><tr><th>Grade</th><th>Roll No.</th><th>Student</th><th class="num">Present</th><th class="num">Absent</th><th class="num">Late</th><th style="width:170px">Attendance</th></tr></thead>
+          <thead><tr><th>${T('th.grade')}</th><th>${T('th.roll')}</th><th>${T('th.student')}</th><th class="num">${T('th.present')}</th><th class="num">${T('th.absent')}</th><th class="num">${T('th.late')}</th><th style="width:170px">${T('th.attendance')}</th></tr></thead>
           <tbody id="sum-body">
             ${month.rows.map(r => `
               <tr class="clickable" data-id="${r.id}">
@@ -464,11 +487,11 @@ async function renderAttendance() {
               </tr>`).join('')}
           </tbody>
         </table>
-        ${month.rows.length ? '' : `<div class="empty"><span class="emoji">📭</span><b>Nothing here yet</b>Attendance appears once you start marking.</div>`}
+        ${month.rows.length ? '' : `<div class="empty"><span class="emoji">📭</span><b>${T('att.empty2')}</b>${T('att.empty2Hint')}</div>`}
       </div>
       <div class="legend">
-        <span>🟢 present</span><span>🔴 absent</span><span>🟡 late (counts as attended)</span>
-        <span>Attendance % = (present + late) ÷ marked days</span>
+        <span>${T('att.legend1')}</span><span>${T('att.legend2')}</span><span>${T('att.legend3')}</span>
+        <span>${T('att.legend4')}</span>
       </div>
     </div>`;
 
@@ -476,7 +499,7 @@ async function renderAttendance() {
     const c = { present: 0, absent: 0, late: 0, null: 0 };
     Object.values(pending).forEach(v => c[v === null ? 'null' : v]++);
     const el = $('#tally');
-    if (el) el.textContent = `✅ ${c.present} present · ❌ ${c.absent} absent · 🟡 ${c.late} late · ${c.null} unmarked`;
+    if (el) el.textContent = T('att.tally', { p: c.present, a: c.absent, l: c.late, u: c.null });
   };
   const paintRow = sid => {
     $$(`#mark-list button[data-sid="${sid}"]`).forEach(b =>
@@ -506,7 +529,7 @@ async function renderAttendance() {
       const entries = Object.entries(pending).map(([id, status]) => ({ student_id: Number(id), status }));
       try {
         await api('/api/attendance', { method: 'POST', body: { date: f.date, entries } });
-        toast(`Attendance saved for ${f.date}`);
+        toast(T('toast.attSaved', { date: f.date }));
         renderAttendance();
       } catch (ex) { warn(ex.message); }
     });
@@ -527,15 +550,15 @@ function markRow(s) {
         <div class="avatar" style="background:${avColor(s.id)}">${esc(initials(s.name))}</div>
         <div>
           <div class="mark-name">${esc(s.name)}</div>
-          <div class="mark-sub">Grade ${esc(s.grade)} · Roll ${esc(s.roll3)}</div>
+          <div class="mark-sub">${T('mark.gradeRoll', { g: esc(s.grade), r: esc(s.roll3) })}</div>
         </div>
       </div>
-      <div class="seg">${btn('present', 'Present')}${btn('absent', 'Absent')}${btn('late', 'Late')}</div>
+      <div class="seg">${btn('present', T('mark.present'))}${btn('absent', T('mark.absent'))}${btn('late', T('mark.late'))}</div>
     </div>`;
 }
 
 function attBar(r) {
-  if (!r.marked) return '<span class="chip grey">not marked</span>';
+  if (!r.marked) return `<span class="chip grey">${T('chip.notMarked')}</span>`;
   const good = r.percent >= 90;
   return `<div style="display:flex;align-items:center;gap:9px">
       <div class="bar"><i style="width:${Math.max(3, r.percent)}%"></i></div>
@@ -559,13 +582,13 @@ async function renderScores() {
 
   $('#view').innerHTML = `
     <div class="section-head">
-      <div><h2>📝 Monthly test scores</h2><p>Create each test, enter the marks — they are allotted to students automatically.</p></div>
-      <button class="btn btn-primary no-print" id="btn-new-test">＋ New test</button>
+      <div><h2>${T('sc.title')}</h2><p>${T('sc.sub')}</p></div>
+      <button class="btn btn-primary no-print" id="btn-new-test">${T('sc.new')}</button>
     </div>
 
     <div class="card">
       <div class="card-title">
-        <h3>Tests in ${esc(monthLabel(f.month))}</h3>
+        <h3>${T('sc.testsIn', { m: esc(monthLabel(f.month)) })}</h3>
         <div class="month-nav no-print">
           <input type="month" class="input" id="t-month" value="${esc(f.month)}">
           <select class="input" id="t-grade">${gradeOptions(grades, f.grade)}</select>
@@ -576,15 +599,15 @@ async function renderScores() {
           <div class="test-card ${t.id === f.testId ? 'sel' : ''}" data-id="${t.id}">
             <div>
               <div class="test-name">${esc(t.name)}</div>
-              <div class="test-meta">${t.test_date ? '📅 ' + esc(t.test_date) + ' · ' : ''}out of <b>${fmt(t.max_score)}</b> · ${esc(monthLabel(t.month))}</div>
+              <div class="test-meta">${t.test_date ? '📅 ' + esc(t.test_date) + ' · ' : ''}${T('sc.outOf')} <b>${fmt(t.max_score)}</b> · ${esc(monthLabel(t.month))}</div>
             </div>
             <div style="display:flex;gap:8px">
-              <button class="btn btn-sm ${t.id === f.testId ? 'btn-primary' : 'btn-ghost'}" data-act="open">${t.id === f.testId ? 'Editing ✓' : 'Enter scores'}</button>
+              <button class="btn btn-sm ${t.id === f.testId ? 'btn-primary' : 'btn-ghost'}" data-act="open">${t.id === f.testId ? T('sc.editing') : T('sc.enter')}</button>
               ${App.role === 'admin' ? '<button class="btn btn-sm btn-danger" data-act="del">✕</button>' : ''}
             </div>
           </div>`).join('')}
       </div>
-      ${tests.length ? '' : `<div class="empty"><span class="emoji">📄</span><b>No tests for ${esc(monthLabel(f.month))}</b>Click “New test” to create one.</div>`}
+      ${tests.length ? '' : `<div class="empty"><span class="emoji">📄</span><b>${T('sc.empty', { m: esc(monthLabel(f.month)) })}</b>${T('sc.emptyHint')}</div>`}
     </div>
 
     <div id="entry-slot"></div>`;
@@ -599,13 +622,13 @@ async function renderScores() {
     const btn = e.target.closest('button[data-act]');
     if (btn && btn.dataset.act === 'del') {
       openModal({
-        title: 'Delete this test?',
-        body: '<p style="margin:0;line-height:1.6">The test and every score inside it will be removed from all students.</p>',
-        footer: `<button class="btn btn-ghost" id="m-cancel">Cancel</button><button class="btn btn-danger" id="m-ok">Delete test</button>`,
+        title: T('del.title'),
+        body: `<p style="margin:0;line-height:1.6">${T('del.body')}</p>`,
+        footer: `<button class="btn btn-ghost" id="m-cancel">${T('btn.cancel')}</button><button class="btn btn-danger" id="m-ok">${T('del.btn')}</button>`,
       });
       $('#m-cancel').onclick = closeModal;
       $('#m-ok').onclick = async () => {
-        try { await api(`/api/tests?id=${id}`, { method: 'DELETE' }); closeModal(); toast('Test deleted'); f.testId = null; renderScores(); }
+        try { await api(`/api/tests?id=${id}`, { method: 'DELETE' }); closeModal(); toast(T('toast.testDel')); f.testId = null; renderScores(); }
         catch (ex) { warn(ex.message); }
       };
       return;
@@ -620,16 +643,16 @@ async function renderScores() {
 function openNewTest() {
   const f = App.filters.scores;
   openModal({
-    title: '＋ New test',
+    title: T('new.title'),
     body: `
       <div id="test-err"></div>
-      <div class="field"><label>Test name</label><input id="t-name" placeholder="e.g. Unit Test 1" autocomplete="off"></div>
+      <div class="field"><label>${T('new.name')}</label><input id="t-name" placeholder="e.g. Unit Test 1" autocomplete="off"></div>
       <div class="row">
-        <div class="field"><label>Month</label><input type="month" id="t-m" value="${esc(f.month)}"></div>
-        <div class="field"><label>Test date (optional)</label><input type="date" id="t-d"></div>
-        <div class="field"><label>Maximum marks</label><input id="t-max" inputmode="decimal" placeholder="25" value="25"></div>
+        <div class="field"><label>${T('new.month')}</label><input type="month" id="t-m" value="${esc(f.month)}"></div>
+        <div class="field"><label>${T('new.date')}</label><input type="date" id="t-d"></div>
+        <div class="field"><label>${T('new.max')}</label><input id="t-max" inputmode="decimal" placeholder="25" value="25"></div>
       </div>`,
-    footer: `<button class="btn btn-ghost" id="m-cancel">Cancel</button><button class="btn btn-primary" id="m-save">Create test</button>`,
+    footer: `<button class="btn btn-ghost" id="m-cancel">${T('btn.cancel')}</button><button class="btn btn-primary" id="m-save">${T('new.create')}</button>`,
   });
   $('#t-name').focus();
   $('#m-cancel').onclick = closeModal;
@@ -638,7 +661,7 @@ function openNewTest() {
     $('#test-err').innerHTML = '';
     try {
       const r = await api('/api/tests', { method: 'POST', body });
-      closeModal(); toast('Test created');
+      closeModal(); toast(T('toast.testCreated'));
       f.month = body.month; f.testId = r.id;
       renderScores();
     } catch (ex) { $('#test-err').innerHTML = `<div class="alert">${esc(ex.message)}</div>`; }
@@ -658,18 +681,18 @@ async function renderScoreEntry(testId) {
     <div class="card" id="entry-card">
       <div class="card-title">
         <div>
-          <h3>${esc(test.name)} — score sheet</h3>
-          <p class="muted" style="margin:5px 0 0;font-size:13.4px">Out of <b>${fmt(test.max_score)}</b> · ${esc(monthLabel(test.month))} · ${students.length} students</p>
+          <h3>${esc(test.name)} ${T('entry.title')}</h3>
+          <p class="muted" style="margin:5px 0 0;font-size:13.4px">${T('entry.sub', { max: `<b>${fmt(test.max_score)}</b>`, m: esc(monthLabel(test.month)), n: students.length })}</p>
         </div>
         <div class="month-nav no-print">
           <span class="muted" id="entry-tally" style="font-size:13.2px"></span>
-          <button class="btn btn-primary" id="btn-save-scores">💾 Save scores</button>
+          <button class="btn btn-primary" id="btn-save-scores">${T('entry.save')}</button>
         </div>
       </div>
       <div class="table-wrap">
         <table>
-          <thead><tr><th style="width:90px">Grade</th><th style="width:120px">Roll No.</th><th>Student</th>
-            <th class="num" style="width:120px">Score</th><th class="num" style="width:110px">%</th><th style="width:90px">Grade</th></tr></thead>
+          <thead><tr><th style="width:90px">${T('th.grade')}</th><th style="width:120px">${T('th.roll')}</th><th>${T('th.student')}</th>
+            <th class="num" style="width:120px">${T('th.score')}</th><th class="num" style="width:110px">%</th><th style="width:90px">${T('th.gradeLetter')}</th></tr></thead>
           <tbody id="score-body">
             ${students.map(s => `
               <tr data-id="${s.id}">
@@ -682,9 +705,9 @@ async function renderScoreEntry(testId) {
               </tr>`).join('')}
           </tbody>
         </table>
-        ${students.length ? '' : `<div class="empty"><span class="emoji">🙈</span><b>No students in this filter</b>Change the grade filter to see students.</div>`}
+        ${students.length ? '' : `<div class="empty"><span class="emoji">🙈</span><b>${T('entry.empty')}</b>${T('entry.emptyHint')}</div>`}
       </div>
-      <div class="legend"><span>Leave a box blank if a student was absent for this test — blank scores are not counted.</span></div>
+      <div class="legend"><span>${T('entry.legend')}</span></div>
     </div>`;
 
   $('#entry-card').scrollIntoView({ behavior: 'smooth', block: 'start' });
@@ -703,7 +726,7 @@ async function renderScoreEntry(testId) {
       const val = Number(raw);
       if (Number.isNaN(val) || val < 0 || val > ceiling) {
         input.classList.add('bad');
-        cellPct.innerHTML = '<span class="chip red">invalid</span>';
+        cellPct.innerHTML = `<span class="chip red">${T('entry.invalid')}</span>`;
         cellGrade.innerHTML = '<span class="chip grey">—</span>';
         return;
       }
@@ -713,7 +736,7 @@ async function renderScoreEntry(testId) {
       cellPct.textContent = `${Math.round(p)}%`;
       cellGrade.innerHTML = `<span class="chip ${p >= 90 ? 'green' : p >= 60 ? 'violet' : p >= 40 ? 'amber' : 'red'}">${letter(p)}</span>`;
     });
-    $('#entry-tally').textContent = filled ? `${filled} scored · class average ${Math.round(sum / filled)}/${fmt(ceiling)}` : 'no scores yet';
+    $('#entry-tally').textContent = filled ? T('entry.tally', { n: filled, avg: Math.round(sum / filled), max: fmt(ceiling) }) : T('entry.noScores');
   };
 
   $('#score-body').addEventListener('input', e => {
@@ -727,7 +750,7 @@ async function renderScoreEntry(testId) {
     const entries = Object.entries(pending).map(([id, score]) => ({ student_id: Number(id), score }));
     try {
       await api('/api/scores', { method: 'POST', body: { test_id: testId, entries } });
-      toast(`Scores saved for ${test.name}`);
+      toast(T('toast.scoresSaved', { name: test.name }));
       renderScoreEntry(testId);
     } catch (ex) { warn(ex.message); }
   });
@@ -753,35 +776,35 @@ async function renderReport() {
 
   $('#view').innerHTML = `
     <div class="section-head">
-      <div><h2>📊 Monthly performance report</h2><p>Scores, totals, grades, ranks and attendance — ${esc(monthLabel(f.month))}.</p></div>
+      <div><h2>${T('rep.title')}</h2><p>${T('rep.sub', { m: esc(monthLabel(f.month)) })}</p></div>
       <div class="hero-actions no-print" style="gap:10px">
-        <button class="btn btn-ghost" id="btn-print">🖨 Print</button>
-        <button class="btn btn-mint" id="btn-csv">⬇ Export CSV</button>
+        <button class="btn btn-ghost" id="btn-print">${T('rep.print')}</button>
+        <button class="btn btn-mint" id="btn-csv">${T('rep.csv')}</button>
       </div>
     </div>
 
     <div class="toolbar no-print">
       <input type="month" class="input" id="r-month" value="${esc(f.month)}">
       <select class="input" id="r-grade">${gradeOptions(grades, f.grade)}</select>
-      <span class="muted" style="font-size:13px">Click any row for the full student record</span>
+      <span class="muted" style="font-size:13px">${T('rep.clickRow')}</span>
     </div>
 
     <div class="grid grid-4" style="margin-bottom:18px">
-      ${stat('v', 'Students', report.class.students, f.grade ? `grade ${esc(f.grade)}` : 'all grades')}
-      ${stat('p', 'Tests', report.class.tests, monthLabel(f.month))}
-      ${stat('m', 'Class average', report.class.average === null ? '—' : pctText(report.class.average), `of ${report.class.tested} scored`)}
-      ${stat('s', 'Highest', report.class.highest === null || report.class.highest === undefined ? '—' : pctText(report.class.highest), 'top score among scored students')}
+      ${stat('v', T('stat.students'), report.class.students, f.grade ? T('stat.gradeNote', { g: esc(f.grade) }) : T('stat.allGrades'))}
+      ${stat('p', T('stat.tests'), report.class.tests, monthLabel(f.month))}
+      ${stat('m', T('stat.avg'), report.class.average === null ? '—' : pctText(report.class.average), T('stat.avgNote', { n: report.class.tested }))}
+      ${stat('s', T('stat.highest'), report.class.highest === null || report.class.highest === undefined ? '—' : pctText(report.class.highest), T('stat.highestNote'))}
     </div>
 
     <div class="card">
-      <div class="card-title"><h3>Score allocation — ${esc(monthLabel(f.month))}</h3></div>
+      <div class="card-title"><h3>${T('rep.card', { m: esc(monthLabel(f.month)) })}</h3></div>
       <div class="table-wrap">
         <table>
           <thead>
             <tr>
-              <th style="width:80px">Grade</th><th style="width:115px">Roll No.</th><th>Student</th>
+              <th style="width:80px">${T('th.grade')}</th><th style="width:115px">${T('th.roll')}</th><th>${T('th.student')}</th>
               ${report.tests.map(t => `<th class="num">${esc(t.name)}<br><span style="font-weight:400;text-transform:none;letter-spacing:0">/${fmt(t.max_score)}</span></th>`).join('')}
-              <th class="num">Total</th><th class="num">%</th><th>Grade</th><th class="num">Rank</th><th style="width:150px">Attendance</th>
+              <th class="num">${T('th.total')}</th><th class="num">%</th><th>${T('th.gradeLetter')}</th><th class="num">${T('th.rank')}</th><th style="width:150px">${T('th.attendance')}</th>
             </tr>
           </thead>
           <tbody id="rep-body">
@@ -802,11 +825,11 @@ async function renderReport() {
               </tr>`).join('')}
           </tbody>
         </table>
-        ${report.rows.length ? '' : `<div class="empty"><span class="emoji">📉</span><b>No students to report</b>Add students first, then enter scores.</div>`}
+        ${report.rows.length ? '' : `<div class="empty"><span class="emoji">📉</span><b>${T('rep.empty')}</b>${T('rep.emptyHint')}</div>`}
       </div>
       <div class="legend">
-        <span>Grades: A+ ≥90 · A ≥80 · B+ ≥70 · B ≥60 · C ≥50 · D ≥40 · F &lt;40</span>
-        <span>Rank ties share the same position</span>
+        <span>${T('rep.legend1')}</span>
+        <span>${T('rep.legend2')}</span>
       </div>
     </div>`;
 
@@ -823,20 +846,20 @@ async function exportCsv(month, grade) {
   try {
     const res = await fetch(`/api/export?month=${month}&grade=${encodeURIComponent(grade || '')}`,
       { headers: { Authorization: 'Bearer ' + App.token } });
-    if (!res.ok) throw new Error('Export failed');
+    if (!res.ok) throw new Error(T('err.export'));
     const blob = await res.blob();
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url; a.download = `report_${month}${grade ? '_' + grade : ''}.csv`;
     document.body.appendChild(a); a.click(); a.remove();
     setTimeout(() => URL.revokeObjectURL(url), 1500);
-    toast('CSV downloaded');
+    toast(T('toast.csv'));
   } catch (ex) { warn(ex.message); }
 }
 
 /* ------------------------------ student detail ------------------------------ */
 async function openStudent(id) {
-  openModal({ title: '🎓 Student record', wide: true, body: '<div class="boot"><div class="boot-logo">⏳</div></div>' });
+  openModal({ title: T('rec.title'), wide: true, body: '<div class="boot"><div class="boot-logo">⏳</div></div>' });
   let d;
   try { d = await api(`/api/student?id=${id}`); }
   catch (ex) { $('#modal-body').innerHTML = `<div class="alert">${esc(ex.message)}</div>`; return; }
@@ -856,61 +879,61 @@ function studentHtml(d) {
       <div class="avatar" style="width:62px;height:62px;border-radius:20px;font-size:23px;background:${avColor(s.id)}">${esc(initials(s.name))}</div>
       <div style="flex:1;min-width:180px">
         <div style="font-family:'Fredoka',sans-serif;font-size:23px">${esc(s.name)}</div>
-        <div class="muted" style="font-size:13.6px">Grade ${esc(s.grade)} · Roll <span class="roll">${esc(s.grade)}-${esc(s.roll3)}</span></div>
+        <div class="muted" style="font-size:13.6px">${T('rec.gradeRoll', { g: esc(s.grade) })} <span class="roll">${esc(s.grade)}-${esc(s.roll3)}</span></div>
       </div>
       <span class="chip ${attPct === null ? 'grey' : attPct >= 90 ? 'green' : attPct >= 75 ? 'amber' : 'red'}">
-        ${attPct === null ? 'attendance —' : pctText(attPct) + ' overall'}
+        ${attPct === null ? T('rec.attNone') : T('rec.attOverall', { p: pctText(attPct) })}
       </span>
     </div>
 
     <div class="kv">
-      <div><div class="k">Days present</div><div class="v">${t.p}</div></div>
-      <div><div class="k">Days absent</div><div class="v">${t.ab}</div></div>
-      <div><div class="k">Late arrivals</div><div class="v">${t.l}</div></div>
-      <div><div class="k">Best month</div><div class="v">${best ? pctText(best.percent) : '—'}</div></div>
+      <div><div class="k">${T('kv.daysPresent')}</div><div class="v">${t.p}</div></div>
+      <div><div class="k">${T('kv.daysAbsent')}</div><div class="v">${t.ab}</div></div>
+      <div><div class="k">${T('kv.lateArr')}</div><div class="v">${t.l}</div></div>
+      <div><div class="k">${T('kv.bestMonth')}</div><div class="v">${best ? pctText(best.percent) : '—'}</div></div>
     </div>
 
-    <h4 style="margin:20px 0 8px">📅 Monthly attendance</h4>
+    <h4 style="margin:20px 0 8px">${T('rec.attH')}</h4>
     <div class="table-wrap">
       <table>
-        <thead><tr><th>Month</th><th class="num">Present</th><th class="num">Absent</th><th class="num">Late</th><th style="width:150px">Attendance</th></tr></thead>
+        <thead><tr><th>${T('th.month')}</th><th class="num">${T('th.present')}</th><th class="num">${T('th.absent')}</th><th class="num">${T('th.late')}</th><th style="width:150px">${T('th.attendance')}</th></tr></thead>
         <tbody>
           ${d.attendance_months.length ? d.attendance_months.map(m => `
             <tr><td>${esc(monthLabel(m.month))}</td><td class="num">${m.present}</td><td class="num">${m.absent}</td>
             <td class="num">${m.late}</td><td>${attBar({ percent: m.percent, marked: m.marked })}</td></tr>`).join('')
-          : '<tr><td colspan="5" class="muted" style="text-align:center;padding:18px">No attendance recorded yet</td></tr>'}
+          : `<tr><td colspan="5" class="muted" style="text-align:center;padding:18px">${T('rec.noAtt')}</td></tr>`}
         </tbody>
       </table>
     </div>
 
-    <h4 style="margin:20px 0 8px">🏆 Monthly performance</h4>
+    <h4 style="margin:20px 0 8px">${T('rec.perfH')}</h4>
     <div class="table-wrap">
       <table>
-        <thead><tr><th>Month</th><th class="num">Tests</th><th class="num">Score</th><th class="num">%</th><th>Grade</th></tr></thead>
+        <thead><tr><th>${T('th.month')}</th><th class="num">${T('th.tests')}</th><th class="num">${T('th.score')}</th><th class="num">%</th><th>${T('th.gradeLetter')}</th></tr></thead>
         <tbody>
           ${d.performance.length ? d.performance.map(p => `
             <tr><td>${esc(monthLabel(p.month))}</td><td class="num">${p.tests}</td>
             <td class="num"><b>${esc(fmt(p.obtained))}</b><span class="muted">/${esc(fmt(p.maximum))}</span></td>
             <td class="num"><b>${esc(pctText(p.percent))}</b></td>
             <td><span class="chip ${p.grade_letter === 'F' ? 'red' : p.grade_letter.startsWith('A') ? 'green' : 'violet'}">${p.grade_letter}</span></td></tr>`).join('')
-          : '<tr><td colspan="5" class="muted" style="text-align:center;padding:18px">No scores entered by the teacher yet</td></tr>'}
+          : `<tr><td colspan="5" class="muted" style="text-align:center;padding:18px">${T('rec.noPerf')}</td></tr>`}
         </tbody>
       </table>
     </div>
 
-    <h4 style="margin:20px 0 8px">📝 Every test</h4>
+    <h4 style="margin:20px 0 8px">${T('rec.testsH')}</h4>
     <div class="table-wrap">
       <table>
-        <thead><tr><th>Test</th><th>Month</th><th class="num">Max</th><th class="num">Score</th><th class="num">%</th></tr></thead>
+        <thead><tr><th>${T('th.test')}</th><th>${T('th.month')}</th><th class="num">${T('th.max')}</th><th class="num">${T('th.score')}</th><th class="num">%</th></tr></thead>
         <tbody>
           ${d.tests.length ? d.tests.map(t => {
             const has = t.score !== null && t.score !== undefined;
             const p = has ? (100 * t.score) / t.max_score : null;
             return `<tr><td class="name-cell">${esc(t.name)}</td><td>${esc(monthLabel(t.month))}</td>
               <td class="num">${esc(fmt(t.max_score))}</td>
-              <td class="num">${has ? `<b>${esc(fmt(t.score))}</b>` : '<span class="muted">absent / not entered</span>'}</td>
+              <td class="num">${has ? `<b>${esc(fmt(t.score))}</b>` : `<span class="muted">${T('rec.notEntered')}</span>`}</td>
               <td class="num">${has ? esc(pctText(p)) : '—'}</td></tr>`;
-          }).join('') : '<tr><td colspan="5" class="muted" style="text-align:center;padding:18px">No tests created yet</td></tr>'}
+          }).join('') : `<tr><td colspan="5" class="muted" style="text-align:center;padding:18px">${T('rec.noTests')}</td></tr>`}
         </tbody>
       </table>
     </div>`;
@@ -931,6 +954,9 @@ function detectForcedDark() {
 
 async function boot() {
   detectForcedDark();
+  document.documentElement.lang = getLang();
+  const bootP = document.querySelector('#app .boot p');
+  if (bootP) bootP.textContent = T('shell.loading');
   try {
     const s = await api('/api/status');
     if (s.setup_required) return renderSetup();
