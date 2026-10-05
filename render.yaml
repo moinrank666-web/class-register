@@ -1,10 +1,11 @@
 services:
-  - type: web    name: class-register
+  - type: web
+    name: class-register
     runtime: python
     autoDeploy: true
     buildCommand: pip install -r requirements.txt && python -m py_compile server.py
     startCommand: python server.py
-    plan: free
+    plan: free
     envVars:
       - key: ATTENDANCE_HOST
         value: 0.0.0.0
@@ -12,6 +13,7 @@ services:
         fromDatabase:
           name: class-register-db
           property: connectionString
+
 databases:
   - name: class-register-db
     plan: free
