@@ -49,12 +49,25 @@ if USE_PG:
         import psycopg
         from psycopg.rows import dict_row
     except ImportError as exc:
-        raise SystemExit(
-            'DATABASE_URL is set but psycopg is missing.\n'
-            'Run:  pip install "psycopg[binary]"   (or pip install -r requirements.txt)'
-        ) from exc
+        # Do not crash the whole service: run on SQLite (as the original
+        # build did) and shout about it in the logs.
+        print(
+            "[warn] DATABASE_URL is set but psycopg is missing — falling back "
+            "to local SQLite.\n"
+            "       Run:  pip install \"psycopg[binary]\"   (or pip install -r requirements.txt)",
+            file=sys.stderr,
+        )
+        USE_PG = False
+        LIKE_OP = "LIKE"
 STATIC_DIR = os.path.join(BASE_DIR, "static")
-HOST = os.environ.get("ATTENDANCE_HOST", "127.0.0.1")
+# Local runs stay loopback-only; on a cloud host (Render sets RENDER and PORT)
+# we must listen on every interface, otherwise the platform's port scan finds
+# nothing on 0.0.0.0 and the deploy times out.
+_HOST_OVERRIDE = os.environ.get("ATTENDANCE_HOST", "").strip()
+HOST = _HOST_OVERRIDE or (
+    "0.0.0.0" if (os.environ.get("RENDER") or os.environ.get("PORT"))
+    else "127.0.0.1"
+)
 def _resolve_port() -> int:
     """ATTENDANCE_PORT wins, then a valid $PORT (e.g. Render's), else 8765.
     Guards against junk values like PORT=0 which would bind a random port."""
@@ -629,6 +642,8 @@ class Handler(BaseHTTPRequestHandler):
         for k, v in (extra or {}).items():
             self.send_header(k, v)
         self.end_headers()
+        if getattr(self, "_head_only", False):
+            return          # HEAD: headers only, Content-Length already sent
         try:
             self.wfile.write(body)
         except BrokenPipeError:
@@ -689,6 +704,15 @@ class Handler(BaseHTTPRequestHandler):
     # ---------- verbs ----------
     def do_GET(self):
         self._handle("GET")
+
+    def do_HEAD(self):
+        # Render's health check / port probe uses HEAD; without this the
+        # stdlib handler answers 501 and every deploy is marked failed.
+        self._head_only = True
+        try:
+            self._handle("GET")
+        finally:
+            self._head_only = False
 
     def do_POST(self):
         self._handle("POST")
@@ -1067,7 +1091,36 @@ class Handler(BaseHTTPRequestHandler):
 
 
 # --------------------------------------------------------------------------
+def _pg_reachable() -> bool:
+    """Probe Postgres at startup (retries a few times, e.g. while it wakes up).
+    Returns False so the caller can fall back instead of crash-looping."""
+    if not USE_PG:
+        return True
+    last = None
+    for attempt in range(1, 4):
+        try:
+            with psycopg.connect(DATABASE_URL, connect_timeout=6) as probe:
+                probe.execute("SELECT 1")
+            return True
+        except Exception as exc:                     # noqa: BLE001 — report any failure
+            last = exc
+            print(f"[warn] Postgres unreachable (attempt {attempt}/3): {exc}",
+                  file=sys.stderr, flush=True)
+            if attempt < 3:
+                time.sleep(2)
+    print(f"[warn] DATABASE_URL is set but unreachable: {last}",
+          file=sys.stderr, flush=True)
+    return False
+
+
 def main():
+    global USE_PG, LIKE_OP
+    if USE_PG and not _pg_reachable():
+        USE_PG = False
+        LIKE_OP = "LIKE"
+        print("[warn] Falling back to local SQLite — data will NOT survive "
+              "restarts/redeploys until Postgres is reachable.",
+              file=sys.stderr, flush=True)
     init_db()
     try:
         os.chmod(DB_PATH, 0o600)   # best-effort: owner-only access to the data file
