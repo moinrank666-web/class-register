@@ -30,6 +30,16 @@ The first visit asks you to create **two different codes** (minimum 4 characters
 Codes are stored as salted PBKDF2 hashes, so they cannot be recovered — write them down.
 Change them any time from **⚙️ Codes** in the header (admin only).
 
+## Three languages
+
+The interface ships in **English · हिंदी (Hindi) · தமிழ் (Tamil)**. Tap the **🌐** pill in
+the header (or on the sign-in screen) to switch — the choice is saved per browser and
+applies instantly to every screen, month names and error messages.
+
+All strings live in `static/i18n.js`: one dictionary per language with ~170 keys and a
+`{placeholder}` syntax. Missing keys fall back to English, so a partial translation can
+never break the UI. To add a language, add one dictionary entry and one `MONTHS` list.
+
 ## What each screen does
 
 | Screen | What happens |
