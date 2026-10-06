@@ -260,6 +260,7 @@ const STRINGS = {
     'cmd.desc.export': 'Download this month as CSV',
     'cmd.desc.print': 'Print this page',
     'cmd.desc.clear': 'Reset search and filters',
+    'foot.ok': 'All systems operational',
   },
 
   hi: {
@@ -517,6 +518,7 @@ const STRINGS = {
     'cmd.desc.export': 'इस महीने की CSV लें',
     'cmd.desc.print': 'यह पेज प्रिंट करें',
     'cmd.desc.clear': 'सर्च और फ़िल्टर साफ़ करें',
+    'foot.ok': 'सभी सिस्टम चालू हैं',
   },
 
   ta: {
@@ -774,6 +776,7 @@ const STRINGS = {
     'cmd.desc.export': 'இந்த மாத CSV பதிவிறக்கு',
     'cmd.desc.print': 'இப்பக்கத்தை அச்சிடு',
     'cmd.desc.clear': 'தேடல் வடிகட்டியை அழி',
+    'foot.ok': 'அனைத்து அமைப்புகளும் இயங்குகின்றன',
   },
 };
 

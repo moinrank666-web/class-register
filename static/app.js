@@ -62,7 +62,7 @@ async function api(path, { method = 'GET', body } = {}) {
 function toast(msg, kind = 'ok') {
   const el = document.createElement('div');
   el.className = `toast ${kind}`;
-  el.innerHTML = `<span>${kind === 'err' ? '⚠️' : '✅'}</span><span>${esc(msg)}</span>`;
+  el.innerHTML = `<i class="toast-bar"></i><span>${kind === 'err' ? '⚠️' : '✅'}</span><span>${esc(msg)}</span>`;
   $('#toast-wrap').appendChild(el);
   setTimeout(() => { el.style.opacity = '0'; el.style.transform = 'translateX(30px)'; el.style.transition = '.3s'; }, 2600);
   setTimeout(() => el.remove(), 3000);
@@ -262,7 +262,11 @@ function renderShell() {
           .map(n => `<button data-view="${n.id}"><span>${n.icon}</span>${T(n.key)}</button>`).join('')}
       </nav>
     </div>
-    <main class="page" id="view"><div class="boot"><div class="boot-logo">⏳</div></div></main>`;
+    <main class="page" id="view"><div class="boot"><div class="boot-logo">⏳</div></div></main>
+    <footer class="app-foot no-print">
+      <span class="foot-brand">📚 Class Register <em>v2026.10</em></span>
+      <span class="foot-status"><i></i>${T('foot.ok')}</span>
+    </footer>`;
 
   $('#btn-menu').onclick = e => { e.stopPropagation(); toggleMenu(); };
   $('#btn-pal').onclick = openPalette;
@@ -282,13 +286,18 @@ function navigate(view) {
   App.view = view;
   $$('#nav button').forEach(b => b.classList.toggle('active', b.dataset.view === view));
   const v = $('#view');
-  v.innerHTML = `<div class="boot"><div class="boot-logo">⏳</div><p>${T('shell.loading')}</p></div>`;
+  v.innerHTML = `
+    <div class="sk sk-title"></div>
+    <div class="grid grid-3" style="margin-bottom:18px"><div class="sk sk-card"></div><div class="sk sk-card"></div><div class="sk sk-card"></div></div>
+    <div class="sk sk-panel"></div>`;
+  v.classList.add('view-enter');
+  setTimeout(() => v.classList.remove('view-enter'), 700);
   ({ students: renderStudents, attendance: renderAttendance, scores: renderScores,
      report: renderReport, activity: renderActivity }[view])();
 }
 
-const stat = (cls, label, num, note) => `
-  <div class="stat ${cls}"><div class="stat-label">${label}</div>
+const stat = (cls, label, num, note, icon = '') => `
+  <div class="stat ${cls}"><div class="stat-top">${icon ? `<span class="stat-ic">${icon}</span>` : ''}<span class="stat-label">${label}</span></div>
   <div class="stat-num">${num}</div>${note ? `<div class="stat-note">${note}</div>` : ''}</div>`;
 
 function gradeOptions(grades, sel) {
@@ -346,13 +355,13 @@ async function renderStudents() {
 
   $('#view').innerHTML = `
     <div class="section-head">
-      <div><h2>${T('stu.title')}</h2><p>${T('stu.sub')}</p></div>
+      <div><span class="eyebrow">${T('nav.students')}</span><h2>${T('stu.title')}</h2><p>${T('stu.sub')}</p></div>
     </div>
 
     <div class="grid grid-3" style="margin-bottom:18px">
-      ${stat('v', T('stat.students'), students.length, T('stat.inRegister'))}
-      ${stat('p', T('stat.grades'), grades.length, T('stat.classes'))}
-      ${stat('m', T('stat.addedMonth'), newThisMonth, monthLabel(thisMonth()))}
+      ${stat('v', T('stat.students'), students.length, T('stat.inRegister'), '🎓')}
+      ${stat('p', T('stat.grades'), grades.length, T('stat.classes'), '🏷️')}
+      ${stat('m', T('stat.addedMonth'), newThisMonth, monthLabel(thisMonth()), '✨')}
     </div>
 
     <div class="card">
@@ -373,9 +382,9 @@ async function renderStudents() {
               <tr class="clickable" data-id="${s.id}">
                 <td><span class="grade-pill">${esc(s.grade)}</span></td>
                 <td><span class="roll">${esc(s.grade)}-${esc(s.roll3)}</span></td>
-                <td class="name-cell">${esc(s.name)}</td>
+                <td class="name-cell"><span class="t-av" style="background:${avColor(s.id)}">${esc(initials(s.name))}</span>${esc(s.name)}</td>
                 <td class="muted">${esc((s.created_at || '').slice(0, 10))}</td>
-                <td class="no-print" style="text-align:right;white-space:nowrap">
+                <td class="no-print row-act" style="text-align:right;white-space:nowrap">
                   <button class="btn btn-sm btn-ghost" data-act="view">${T('btn.view')}</button>
                   ${isAdmin ? `<button class="btn btn-sm btn-danger" data-act="del">${T('btn.remove')}</button>` : ''}
                 </td>
@@ -499,7 +508,7 @@ async function renderAttendance() {
 
   $('#view').innerHTML = `
     <div class="section-head">
-      <div><h2>${T('att.title')}</h2><p>${T('att.sub')} ${isAdmin ? '' : T('att.subTeacher')}</p></div>
+      <div><span class="eyebrow">${T('nav.attendance')}</span><h2>${T('att.title')}</h2><p>${T('att.sub')} ${isAdmin ? '' : T('att.subTeacher')}</p></div>
     </div>
 
     <div class="card">
@@ -645,7 +654,7 @@ async function renderScores() {
 
   $('#view').innerHTML = `
     <div class="section-head">
-      <div><h2>${T('sc.title')}</h2><p>${T('sc.sub')}</p></div>
+      <div><span class="eyebrow">${T('nav.scores')}</span><h2>${T('sc.title')}</h2><p>${T('sc.sub')}</p></div>
     </div>
 
     <div class="card">
@@ -837,7 +846,7 @@ async function renderReport() {
 
   $('#view').innerHTML = `
     <div class="section-head">
-      <div><h2>${T('rep.title')}</h2><p>${T('rep.sub', { m: esc(monthLabel(f.month)) })}</p></div>
+      <div><span class="eyebrow">${T('nav.reports')}</span><h2>${T('rep.title')}</h2><p>${T('rep.sub', { m: esc(monthLabel(f.month)) })}</p></div>
     </div>
 
     <div class="toolbar no-print">
@@ -847,10 +856,10 @@ async function renderReport() {
     </div>
 
     <div class="grid grid-4" style="margin-bottom:18px">
-      ${stat('v', T('stat.students'), report.class.students, f.grade ? T('stat.gradeNote', { g: esc(f.grade) }) : T('stat.allGrades'))}
-      ${stat('p', T('stat.tests'), report.class.tests, monthLabel(f.month))}
-      ${stat('m', T('stat.avg'), report.class.average === null ? '—' : pctText(report.class.average), T('stat.avgNote', { n: report.class.tested }))}
-      ${stat('s', T('stat.highest'), report.class.highest === null || report.class.highest === undefined ? '—' : pctText(report.class.highest), T('stat.highestNote'))}
+      ${stat('v', T('stat.students'), report.class.students, f.grade ? T('stat.gradeNote', { g: esc(f.grade) }) : T('stat.allGrades'), '👥')}
+      ${stat('p', T('stat.tests'), report.class.tests, monthLabel(f.month), '📝')}
+      ${stat('m', T('stat.avg'), report.class.average === null ? '—' : pctText(report.class.average), T('stat.avgNote', { n: report.class.tested }), '📈')}
+      ${stat('s', T('stat.highest'), report.class.highest === null || report.class.highest === undefined ? '—' : pctText(report.class.highest), T('stat.highestNote'), '🏆')}
     </div>
 
     <div class="card">
@@ -923,7 +932,7 @@ async function renderActivity() {
 
   $('#view').innerHTML = `
     <div class="section-head">
-      <div><h2>${T('act.title')}</h2><p>${T('act.sub')}</p></div>
+      <div><span class="eyebrow">${T('nav.activity')}</span><h2>${T('act.title')}</h2><p>${T('act.sub')}</p></div>
     </div>
     <div class="card">
       ${rows.length ? `<div class="act-list">${rows.map(a => `
