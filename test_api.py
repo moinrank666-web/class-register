@@ -10,6 +10,7 @@ import urllib.request
 BASE = sys.argv[1] if len(sys.argv) > 1 else "http://127.0.0.1:8765"
 ADMIN_CODE = "admin-pass-1"
 TEACHER_CODE = "teach-pass-2"
+OBSERVER_CODE = "watch-pass-3"
 FAILURES = []
 
 
@@ -50,7 +51,9 @@ def main():
     print("status / setup")
     st = call("GET", "/api/status")
     check("status shape", st.get("setup_required") in (True, False), str(st))
-    setup = call("POST", "/api/setup", {"admin_code": ADMIN_CODE, "teacher_code": TEACHER_CODE})
+    setup = call("POST", "/api/setup",
+                 {"admin_code": ADMIN_CODE, "teacher_code": TEACHER_CODE,
+                  "observer_code": OBSERVER_CODE})
     token = setup.get("token")
     check("setup returns admin token", bool(token))
     again = call("POST", "/api/setup", {"admin_code": "x1234", "teacher_code": "y1234"}, expect=403)
@@ -61,13 +64,37 @@ def main():
     check("wrong admin code rejected", "error" in bad)
     adm = call("POST", "/api/login", {"role": "admin", "code": ADMIN_CODE})
     tch = call("POST", "/api/login", {"role": "teacher", "code": TEACHER_CODE})
-    A, T = adm.get("token"), tch.get("token")
+    obs = call("POST", "/api/login", {"role": "observer", "code": OBSERVER_CODE})
+    A, T, O = adm.get("token"), tch.get("token"), obs.get("token")
     check("admin login", bool(A))
     check("teacher login", bool(T))
+    check("observer login", bool(O), str(obs))
     check("no token rejected", "error" in call("GET", "/api/students", expect=401))
-    check("teacher cannot add student",
+
+    print("roles & permissions")
+    # teacher may now add students (new requirement); removal stays admin-only
+    added = call("POST", "/api/students",
+                 {"name": "Teacher Added", "grade": "6", "roll3": "999"}, token=T)
+    check("teacher CAN add student", added.get("ok") is True, str(added))
+    tid999 = [s["id"] for s in call("GET", "/api/students", token=T)["students"]
+              if s["roll3"] == "999"]
+    check("teacher's student listed", len(tid999) == 1, str(tid999))
+    check("teacher cannot remove student",
+          "error" in call("DELETE", f"/api/students?id={tid999[0]}", token=T, expect=403))
+    call("DELETE", f"/api/students?id={tid999[0]}", token=A)
+    left = [s for s in call("GET", "/api/students", token=A)["students"] if s["roll3"] == "999"]
+    check("admin removed it again", len(left) == 0, str(left))
+    check("observer can read students",
+          isinstance(call("GET", "/api/students", token=O)["students"], list))
+    check("observer cannot add student",
           "error" in call("POST", "/api/students",
-                          {"name": "Sneaky Kid", "grade": "5", "roll3": "999"}, token=T, expect=403))
+                          {"name": "Nope Kid", "grade": "5", "roll3": "777"},
+                          token=O, expect=403))
+    check("observer cannot record attendance",
+          "error" in call("POST", "/api/attendance",
+                          {"date": "2026-10-03", "entries": []}, token=O, expect=403))
+    check("teacher cannot record attendance", "error" in call(
+        "POST", "/api/attendance", {"date": "2026-10-03", "entries": []}, token=T, expect=403))
 
     print("students")
     for name, grade, roll in [("Ayesha Khan", "5", "042"),
@@ -88,6 +115,17 @@ def main():
     by_roll = {s["roll3"]: s["id"] for s in lst["students"]}
     check("4 students addressed by roll",
           set(by_roll) == {"017", "042", "118", "103"}, str(by_roll))
+
+    print("activity log")
+    feed = call("GET", "/api/activity", token=A).get("activity", [])
+    check("admin sees activity feed", len(feed) > 0, str(len(feed)))
+    seen = {(e["role"], e["action"]) for e in feed}
+    check("teacher's add recorded", ("teacher", "student.add") in seen, str(seen))
+    check("logins recorded", ("admin", "login") in seen, str(seen))
+    check("teacher blocked from activity",
+          "error" in call("GET", "/api/activity", token=T, expect=403))
+    check("observer blocked from activity",
+          "error" in call("GET", "/api/activity", token=O, expect=403))
 
     print("attendance")
     day = call("GET", "/api/attendance/day?date=2026-10-03", token=A)
@@ -135,6 +173,11 @@ def main():
                                              {"student_id": by_roll["118"], "score": 17}]}, token=T)
     sheet = call("GET", f"/api/scores?test_id={t1['id']}", token=A)
     check("score sheet has students", len(sheet["students"]) == 4)
+    check("observer can read a score sheet",
+          len(call("GET", f"/api/scores?test_id={t1['id']}", token=O)["students"]) == 4)
+    check("observer cannot save scores",
+          "error" in call("POST", "/api/scores",
+                          {"test_id": t1["id"], "entries": []}, token=O, expect=403))
     blank = [s for s in sheet["students"] if s["roll3"] == "103"][0]
     check("blank score stored as null", blank["score"] is None, str(blank["score"]))
 

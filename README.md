@@ -22,13 +22,20 @@ Then open **http://127.0.0.1:8765** in your browser.
 
 ## First-time setup
 
-The first visit asks you to create **two different codes** (minimum 4 characters):
+The first visit asks you to create **two different codes** (minimum 4 characters), plus
+an optional third:
 
-- **Admin code** — you. Adds/removes students, records daily attendance, can change codes.
-- **Teacher code** — the teacher. Enters monthly test scores, reads reports and student records.
+- **Admin code** — you. Adds/removes students, records daily attendance, can change codes,
+  and sees the **🕓 Activity log** of everything the other codes did.
+- **Teacher code** — the teacher. Adds students, enters monthly test scores, reads reports.
+- **Observer code** *(optional)* — read-only third code: sees students, attendance, scores
+  and reports, but can never add, edit or delete anything. Leave it blank to skip.
 
 Codes are stored as salted PBKDF2 hashes, so they cannot be recovered — write them down.
 Change them any time from **⚙️ Codes** in the header (admin only).
+
+Every sign-in, added/removed student, saved score sheet, test change and code change is
+recorded and shown to the admin on the **🕓 Activity** tab.
 
 ## Three languages
 

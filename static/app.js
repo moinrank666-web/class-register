@@ -147,12 +147,16 @@ function renderSetup() {
         <span class="hint">${T('setup.teacher.hint')}</span></div>
       <div class="field"><label>${T('setup.teacher2')}</label>
         <input class="code-input" type="password" id="teacher-code2" autocomplete="new-password" placeholder="••••" required></div>
+      <div class="field"><label>${T('setup.observer.label')}</label>
+        <input class="code-input" type="password" id="observer-code" autocomplete="new-password" placeholder="••••" minlength="4">
+        <span class="hint">${T('setup.observer.hint')}</span></div>
       <button class="btn btn-primary" style="width:100%;justify-content:center" type="submit">${T('setup.submit')}</button>
     </form>`);
   $('#setup-form').addEventListener('submit', async e => {
     e.preventDefault();
     const a  = $('#admin-code').value.trim(), a2 = $('#admin-code2').value.trim();
     const t  = $('#teacher-code').value.trim(), t2 = $('#teacher-code2').value.trim();
+    const ob = $('#observer-code').value.trim();
     const box = $('#auth-err');
     box.innerHTML = '';
     const err = m => { box.innerHTML = `<div class="alert">${esc(m)}</div>`; };
@@ -160,8 +164,11 @@ function renderSetup() {
     if (a !== a2) return err(T('setup.err.aMismatch'));
     if (t !== t2) return err(T('setup.err.tMismatch'));
     if (a === t)  return err(T('setup.err.same'));
+    if (ob && ob.length < 4) return err(T('setup.err.len'));
+    if (ob && (ob === a || ob === t)) return err(T('All codes must be different.'));
     try {
-      const r = await api('/api/setup', { method: 'POST', body: { admin_code: a, teacher_code: t } });
+      const r = await api('/api/setup', { method: 'POST',
+        body: { admin_code: a, teacher_code: t, ...(ob ? { observer_code: ob } : {}) } });
       App.token = r.token; App.role = r.role;
       sessionStorage.setItem('cr_token', r.token);
       sessionStorage.setItem('cr_role', r.role);
@@ -178,6 +185,7 @@ function renderLogin(message = '') {
     <div class="role-tabs" id="role-tabs">
       <button type="button" data-role="admin" class="on">${T('role.admin.tab')}</button>
       <button type="button" data-role="teacher">${T('role.teacher.tab')}</button>
+      <button type="button" data-role="observer">${T('role.observer.tab')}</button>
     </div>
     <form id="login-form" novalidate>
       <div class="field"><label id="code-label">${T('login.label.admin')}</label>
@@ -193,8 +201,8 @@ function renderLogin(message = '') {
     const b = e.target.closest('button[data-role]'); if (!b) return;
     role = b.dataset.role;
     $$('#role-tabs button').forEach(x => x.classList.toggle('on', x === b));
-    $('#code-label').textContent = role === 'admin' ? T('login.label.admin') : T('login.label.teacher');
-    $('#code-hint').textContent  = role === 'admin' ? T('login.hint.admin') : T('login.hint.teacher');
+    $('#code-label').textContent = T('login.label.' + role);
+    $('#code-hint').textContent  = T('login.hint.' + role);
     $('#login-code').focus();
   });
   $('#login-form').addEventListener('submit', async e => {
@@ -223,6 +231,7 @@ const NAV = [
   { id: 'attendance', key: 'nav.attendance', icon: '🗓️' },
   { id: 'scores',     key: 'nav.scores',     icon: '📝' },
   { id: 'report',     key: 'nav.reports',    icon: '📊' },
+  { id: 'activity',   key: 'nav.activity',   icon: '🕓' },
 ];
 
 function renderShell() {
@@ -237,7 +246,7 @@ function renderShell() {
           </div>
         </div>
         <div class="hero-actions">
-          <span class="role-chip">${App.role === 'admin' ? T('role.admin.chip') : T('role.teacher.chip')}</span>
+          <span class="role-chip">${T('role.' + (App.role || 'teacher') + '.chip')}</span>
           <button class="hero-btn lang-btn" id="btn-lang" title="Language">🌐 ${esc(nextLangLabel())}</button>
           ${App.role === 'admin' ? `<button class="hero-btn" id="btn-settings">${T('shell.codes')}</button>` : ''}
           <button class="hero-btn" id="btn-logout">${T('shell.signout')}</button>
@@ -246,7 +255,8 @@ function renderShell() {
     </header>
     <div class="nav-wrap">
       <nav class="nav" id="nav">
-        ${NAV.map(n => `<button data-view="${n.id}"><span>${n.icon}</span>${T(n.key)}</button>`).join('')}
+        ${NAV.filter(n => n.id !== 'activity' || App.role === 'admin')
+          .map(n => `<button data-view="${n.id}"><span>${n.icon}</span>${T(n.key)}</button>`).join('')}
       </nav>
     </div>
     <main class="page" id="view"><div class="boot"><div class="boot-logo">⏳</div></div></main>`;
@@ -257,7 +267,9 @@ function renderShell() {
   $('#nav').addEventListener('click', e => {
     const b = e.target.closest('button[data-view]'); if (b) navigate(b.dataset.view);
   });
-  navigate(App.view || 'students');
+  // never resume into the admin-only Activity tab as another role
+  const start = (App.view === 'activity' && App.role !== 'admin') ? 'students' : (App.view || 'students');
+  navigate(start);
 }
 
 function navigate(view) {
@@ -265,7 +277,8 @@ function navigate(view) {
   $$('#nav button').forEach(b => b.classList.toggle('active', b.dataset.view === view));
   const v = $('#view');
   v.innerHTML = `<div class="boot"><div class="boot-logo">⏳</div><p>${T('shell.loading')}</p></div>`;
-  ({ students: renderStudents, attendance: renderAttendance, scores: renderScores, report: renderReport }[view])();
+  ({ students: renderStudents, attendance: renderAttendance, scores: renderScores,
+     report: renderReport, activity: renderActivity }[view])();
 }
 
 const stat = (cls, label, num, note) => `
@@ -284,14 +297,16 @@ async function openCodeModal() {
       <div class="notice">${T('codes.notice')}</div>
       <div id="code-err"></div>
       <div class="field"><label>${T('codes.newAdmin')}</label><input class="code-input" type="password" id="new-admin" placeholder="${T('codes.keep')}"></div>
-      <div class="field"><label>${T('codes.newTeacher')}</label><input class="code-input" type="password" id="new-teacher" placeholder="${T('codes.keep')}"></div>`,
+      <div class="field"><label>${T('codes.newTeacher')}</label><input class="code-input" type="password" id="new-teacher" placeholder="${T('codes.keep')}"></div>
+      <div class="field"><label>${T('codes.newObserver')}</label><input class="code-input" type="password" id="new-observer" placeholder="${T('codes.keep')}"></div>`,
     footer: `<button class="btn btn-ghost" id="m-cancel">${T('btn.cancel')}</button>
              <button class="btn btn-primary" id="save-codes">${T('codes.save')}</button>`,
   });
   $('#m-cancel').onclick = closeModal;
   $('#save-codes').onclick = async () => {
-    const body = { admin_code: $('#new-admin').value.trim(), teacher_code: $('#new-teacher').value.trim() };
-    if (!body.admin_code && !body.teacher_code) return $('#code-err').innerHTML = `<div class="alert">${T('codes.err.one')}</div>`;
+    const body = { admin_code: $('#new-admin').value.trim(), teacher_code: $('#new-teacher').value.trim(),
+                   observer_code: $('#new-observer').value.trim() };
+    if (!body.admin_code && !body.teacher_code && !body.observer_code) return $('#code-err').innerHTML = `<div class="alert">${T('codes.err.one')}</div>`;
     try {
       await api('/api/codes', { method: 'POST', body });
       closeModal(); toast(T('toast.codes'));
@@ -307,12 +322,13 @@ async function renderStudents() {
   catch (ex) { warn(ex.message); return; }
   const { students, grades } = data;
   const isAdmin = App.role === 'admin';
+  const canAdd = isAdmin || App.role === 'teacher';
   const newThisMonth = students.filter(s => (s.created_at || '').startsWith(thisMonth())).length;
 
   $('#view').innerHTML = `
     <div class="section-head">
       <div><h2>${T('stu.title')}</h2><p>${T('stu.sub')}</p></div>
-      ${isAdmin ? `<button class="btn btn-primary no-print" id="btn-add">${T('stu.add')}</button>` : ''}
+      ${canAdd ? `<button class="btn btn-primary no-print" id="btn-add">${T('stu.add')}</button>` : ''}
     </div>
 
     <div class="grid grid-3" style="margin-bottom:18px">
@@ -345,11 +361,11 @@ async function renderStudents() {
               </tr>`).join('') : ''}
           </tbody>
         </table>
-        ${students.length ? '' : `<div class="empty"><span class="emoji">🎒</span><b>${T('stu.empty')}</b>${isAdmin ? T('stu.emptyUse') : T('stu.emptyAsk')}</div>`}
+        ${students.length ? '' : `<div class="empty"><span class="emoji">🎒</span><b>${T('stu.empty')}</b>${canAdd ? T('stu.emptyUse') : T('stu.emptyAsk')}</div>`}
       </div>
     </div>`;
 
-  if (isAdmin) $('#btn-add').onclick = openAddStudent;
+  if (canAdd) $('#btn-add').onclick = openAddStudent;
   const search = debounce(v => { f.q = v; renderStudents(); }, 220);
   $('#f-q').addEventListener('input', e => search(e.target.value.trim()));
   $('#f-q').addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); f.q = e.target.value.trim(); renderStudents(); } });
@@ -553,7 +569,9 @@ function markRow(s) {
           <div class="mark-sub">${T('mark.gradeRoll', { g: esc(s.grade), r: esc(s.roll3) })}</div>
         </div>
       </div>
-      <div class="seg">${btn('present', T('mark.present'))}${btn('absent', T('mark.absent'))}${btn('late', T('mark.late'))}</div>
+      ${App.role === 'admin'
+        ? `<div class="seg">${btn('present', T('mark.present'))}${btn('absent', T('mark.absent'))}${btn('late', T('mark.late'))}</div>`
+        : `<span class="chip ${s.status === 'present' ? 'green' : s.status === 'absent' ? 'red' : s.status === 'late' ? 'amber' : 'grey'}">${s.status ? T('mark.' + s.status) : T('chip.notMarked')}</span>`}
     </div>`;
 }
 
@@ -583,7 +601,7 @@ async function renderScores() {
   $('#view').innerHTML = `
     <div class="section-head">
       <div><h2>${T('sc.title')}</h2><p>${T('sc.sub')}</p></div>
-      <button class="btn btn-primary no-print" id="btn-new-test">${T('sc.new')}</button>
+      ${App.role !== 'observer' ? `<button class="btn btn-primary no-print" id="btn-new-test">${T('sc.new')}</button>` : ''}
     </div>
 
     <div class="card">
@@ -614,7 +632,7 @@ async function renderScores() {
 
   $('#t-month').addEventListener('change', e => { f.month = e.target.value || thisMonth(); f.testId = null; renderScores(); });
   $('#t-grade').addEventListener('change', e => { f.grade = e.target.value; renderScores(); });
-  $('#btn-new-test').onclick = openNewTest;
+  if ($('#btn-new-test')) $('#btn-new-test').onclick = openNewTest;
 
   $('#test-grid').addEventListener('click', async e => {
     const card = e.target.closest('.test-card'); if (!card) return;
@@ -686,7 +704,7 @@ async function renderScoreEntry(testId) {
         </div>
         <div class="month-nav no-print">
           <span class="muted" id="entry-tally" style="font-size:13.2px"></span>
-          <button class="btn btn-primary" id="btn-save-scores">${T('entry.save')}</button>
+          ${App.role === 'observer' ? '' : `<button class="btn btn-primary" id="btn-save-scores">${T('entry.save')}</button>`}
         </div>
       </div>
       <div class="table-wrap">
@@ -699,7 +717,7 @@ async function renderScoreEntry(testId) {
                 <td><span class="grade-pill">${esc(s.grade)}</span></td>
                 <td><span class="roll">${esc(s.grade)}-${esc(s.roll3)}</span></td>
                 <td class="name-cell">${esc(s.name)}</td>
-                <td class="num"><input class="input score-input" data-sid="${s.id}" inputmode="decimal" value="${esc(pending[s.id])}" placeholder="—"></td>
+                <td class="num"><input class="input score-input" data-sid="${s.id}" inputmode="decimal" value="${esc(pending[s.id])}" placeholder="—"${App.role === 'observer' ? ' disabled' : ''}></td>
                 <td class="num pct-cell">—</td>
                 <td class="grade-cell"><span class="chip grey">—</span></td>
               </tr>`).join('')}
@@ -746,7 +764,8 @@ async function renderScoreEntry(testId) {
     pending[sid] = inp.value;
     recalc();
   });
-  $('#btn-save-scores').addEventListener('click', async () => {
+  const saveBtn = $('#btn-save-scores');
+  if (saveBtn) saveBtn.addEventListener('click', async () => {
     const entries = Object.entries(pending).map(([id, score]) => ({ student_id: Number(id), score }));
     try {
       await api('/api/scores', { method: 'POST', body: { test_id: testId, entries } });
@@ -855,6 +874,30 @@ async function exportCsv(month, grade) {
     setTimeout(() => URL.revokeObjectURL(url), 1500);
     toast(T('toast.csv'));
   } catch (ex) { warn(ex.message); }
+}
+
+/* ------------------------------ activity (admin only) ------------------------------ */
+async function renderActivity() {
+  let data;
+  try { data = await api('/api/activity'); }
+  catch (ex) { warn(ex.message); return; }
+  const rows = data.activity || [];
+  const roleChip = r => `<span class="chip ${r === 'admin' ? 'violet' : r === 'teacher' ? 'green' : 'grey'}">${T('role.' + r + '.name')}</span>`;
+  const stamp = v => String(v || '').replace('T', ' ').slice(0, 16);
+
+  $('#view').innerHTML = `
+    <div class="section-head">
+      <div><h2>${T('act.title')}</h2><p>${T('act.sub')}</p></div>
+    </div>
+    <div class="card">
+      ${rows.length ? `<div class="act-list">${rows.map(a => `
+        <div class="act-row">
+          ${roleChip(a.role)}
+          <div class="act-main"><b>${T('act.' + a.action)}</b>${a.detail ? `<span class="muted"> — ${esc(a.detail)}</span>` : ''}</div>
+          <span class="act-time">${esc(stamp(a.created_at))}</span>
+        </div>`).join('')}</div>`
+      : `<div class="empty"><span class="emoji">🕓</span><b>${T('act.empty')}</b>${T('act.emptyHint')}</div>`}
+    </div>`;
 }
 
 /* ------------------------------ student detail ------------------------------ */

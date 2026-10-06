@@ -155,6 +155,13 @@ CREATE TABLE IF NOT EXISTS scores (
     score      REAL NOT NULL,
     UNIQUE (test_id, student_id)
 );
+CREATE TABLE IF NOT EXISTS activity (
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    role       TEXT NOT NULL,
+    action     TEXT NOT NULL,
+    detail     TEXT NOT NULL DEFAULT '',
+    created_at TEXT NOT NULL
+);
 CREATE INDEX IF NOT EXISTS idx_att_date ON attendance(date);
 CREATE INDEX IF NOT EXISTS idx_scores_test ON scores(test_id);
 """
@@ -193,6 +200,13 @@ CREATE TABLE IF NOT EXISTS scores (
     student_id BIGINT NOT NULL REFERENCES students(id) ON DELETE CASCADE,
     score      DOUBLE PRECISION NOT NULL,
     UNIQUE (test_id, student_id)
+);
+CREATE TABLE IF NOT EXISTS activity (
+    id         BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    role       TEXT NOT NULL,
+    action     TEXT NOT NULL,
+    detail     TEXT NOT NULL DEFAULT '',
+    created_at TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_att_date ON attendance(date);
 CREATE INDEX IF NOT EXISTS idx_scores_test ON scores(test_id);
@@ -279,6 +293,12 @@ def is_unique_violation(exc) -> bool:
     if USE_PG:
         return isinstance(exc, psycopg.errors.UniqueViolation)
     return isinstance(exc, sqlite3.IntegrityError)
+
+
+def log_activity(c, role, action, detail=""):
+    """Append one audit row; the admin reviews these on the Activity tab."""
+    c.execute("INSERT INTO activity(role, action, detail, created_at) VALUES(?,?,?,?)",
+              (role, action, detail, datetime.now().isoformat(timespec="seconds")))
 
 
 # --------------------------------------------------------------------------
@@ -796,11 +816,20 @@ class Handler(BaseHTTPRequestHandler):
             b = self.body()
             admin = text(b.get("admin_code"), "Admin code", 4, 64)
             teacher = text(b.get("teacher_code"), "Teacher code", 4, 64)
+            observer = b.get("observer_code") or ""
+            if observer:
+                observer = text(observer, "Observer code", 4, 64)
             if admin == teacher:
                 raise ValueError("The two codes must be different.")
+            if observer and observer in (admin, teacher):
+                raise ValueError("All codes must be different.")
             with db_conn() as c:
                 c.execute("INSERT INTO settings(key, value) VALUES(?,?)", ("admin_hash", hash_code(admin)))
                 c.execute("INSERT INTO settings(key, value) VALUES(?,?)", ("teacher_hash", hash_code(teacher)))
+                if observer:
+                    c.execute("INSERT INTO settings(key, value) VALUES(?,?)",
+                              ("observer_hash", hash_code(observer)))
+                log_activity(c, "admin", "setup", "register created")
             rate_clear(ip, "setup")
             self.send_json({"ok": True, "token": create_session("admin"), "role": "admin"})
             return
@@ -815,10 +844,11 @@ class Handler(BaseHTTPRequestHandler):
             rate_fail(ip, "login")
             b = self.body()
             role = b.get("role")
-            if role not in ("admin", "teacher"):
-                raise ValueError("Choose admin or teacher.")
+            if role not in ("admin", "teacher", "observer"):
+                raise ValueError("Choose admin, teacher or observer.")
             code = text(b.get("code"), "Code", 1, 64)
-            key = "admin_hash" if role == "admin" else "teacher_hash"
+            key = {"admin": "admin_hash", "teacher": "teacher_hash",
+                   "observer": "observer_hash"}[role]
             with db_conn() as c:
                 stored = get_setting(c, key)
             if not stored or not verify_code(code, stored):
@@ -830,6 +860,8 @@ class Handler(BaseHTTPRequestHandler):
                 with db_conn() as c:
                     c.execute("UPDATE settings SET value = ? WHERE key = ?", (hash_code(code), key))
             rate_clear(ip, "login")
+            with db_conn() as c:
+                log_activity(c, role, "login", "")
             self.send_json({"ok": True, "role": role, "token": create_session(role)})
             return
 
@@ -849,6 +881,20 @@ class Handler(BaseHTTPRequestHandler):
         if not role:
             return
         is_admin = role == "admin"
+        if role == "observer" and method in ("POST", "DELETE", "PUT"):
+            self.fail("Observer access is read-only.", 403)
+            return
+
+        if path == "/api/activity" and method == "GET":
+            if not is_admin:
+                self.fail("Admin access required.", 403)
+                return
+            with db_conn() as c:
+                rows = [dict(r) for r in c.execute(
+                    "SELECT role, action, detail, created_at FROM activity "
+                    "ORDER BY id DESC LIMIT 150")]
+            self.send_json({"activity": rows})
+            return
 
         # codes
         if method == "POST" and path == "/api/codes":
@@ -861,12 +907,16 @@ class Handler(BaseHTTPRequestHandler):
                 updates["admin_hash"] = hash_code(text(b["admin_code"], "Admin code", 4, 64))
             if b.get("teacher_code"):
                 updates["teacher_hash"] = hash_code(text(b["teacher_code"], "Teacher code", 4, 64))
+            if b.get("observer_code"):
+                updates["observer_hash"] = hash_code(text(b["observer_code"], "Observer code", 4, 64))
             if not updates:
-                raise ValueError("Provide a new admin code, a new teacher code, or both.")
+                raise ValueError("Provide a new admin code, a new teacher code, a new observer code, or a combination.")
             with db_conn() as c:
                 for k, v in updates.items():
                     c.execute("INSERT INTO settings(key, value) VALUES(?,?) "
                               "ON CONFLICT(key) DO UPDATE SET value = excluded.value", (k, v))
+                log_activity(c, role, "codes.change",
+                             ", ".join(k.replace("_hash", "") for k in updates))
             drop_sessions_except(self._token())  # old credentials -> all other sessions die
             self.send_json({"ok": True})
             return
@@ -882,9 +932,7 @@ class Handler(BaseHTTPRequestHandler):
                 self.send_json({"students": students, "grades": grades})
                 return
             if method == "POST":
-                if not is_admin:
-                    self.fail("Only the admin can add students.", 403)
-                    return
+                # admin and teacher may both add students; observer is blocked centrally
                 b = self.body()
                 name = text(b.get("name"), "Name", 2, 60)
                 grade = text(b.get("grade"), "Grade", 1, 30)
@@ -896,6 +944,7 @@ class Handler(BaseHTTPRequestHandler):
                         student_id = insert_id(
                             c, "INSERT INTO students(name, grade, roll3, created_at) VALUES(?,?,?,?)",
                             (name, grade, roll3, datetime.now().isoformat(timespec="seconds")))
+                        log_activity(c, role, "student.add", f"{name} · {grade}-{roll3}")
                 except Exception as e:
                     if not is_unique_violation(e):
                         raise
@@ -908,9 +957,12 @@ class Handler(BaseHTTPRequestHandler):
                     return
                 sid = int(q("id", "0") or 0)
                 with db_conn() as c:
-                    cur = c.execute("DELETE FROM students WHERE id = ?", (sid,))
-                    if cur.rowcount == 0:
+                    row = c.execute("SELECT name, grade, roll3 FROM students WHERE id = ?", (sid,)).fetchone()
+                    if not row:
                         raise ValueError("Student not found.")
+                    c.execute("DELETE FROM students WHERE id = ?", (sid,))
+                    log_activity(c, role, "student.delete",
+                                 f"{row['name']} · {row['grade']}-{row['roll3']}")
                 self.send_json({"ok": True})
                 return
 
@@ -957,6 +1009,7 @@ class Handler(BaseHTTPRequestHandler):
                             "INSERT INTO attendance(student_id, date, status) VALUES(?,?,?) "
                             "ON CONFLICT(student_id, date) DO UPDATE SET status = excluded.status",
                             (sid, d, status))
+                log_activity(c, role, "attendance.save", d)
             self.send_json({"ok": True, "date": d})
             return
 
@@ -987,6 +1040,7 @@ class Handler(BaseHTTPRequestHandler):
                     tid = insert_id(
                         c, "INSERT INTO tests(name, month, max_score, test_date, created_at) VALUES(?,?,?,?,?)",
                         (name, m, max_score, test_date, datetime.now().isoformat(timespec="seconds")))
+                    log_activity(c, role, "test.create", name)
                 self.send_json({"ok": True, "id": tid})
                 return
             if method == "DELETE":
@@ -995,9 +1049,11 @@ class Handler(BaseHTTPRequestHandler):
                     return
                 tid = int(q("id", "0") or 0)
                 with db_conn() as c:
-                    cur = c.execute("DELETE FROM tests WHERE id = ?", (tid,))
-                    if cur.rowcount == 0:
+                    row = c.execute("SELECT name FROM tests WHERE id = ?", (tid,)).fetchone()
+                    if not row:
                         raise ValueError("Test not found.")
+                    c.execute("DELETE FROM tests WHERE id = ?", (tid,))
+                    log_activity(c, role, "test.delete", row["name"])
                 self.send_json({"ok": True})
                 return
 
@@ -1042,6 +1098,7 @@ class Handler(BaseHTTPRequestHandler):
                             "INSERT INTO scores(test_id, student_id, score) VALUES(?,?,?) "
                             "ON CONFLICT(test_id, student_id) DO UPDATE SET score = excluded.score",
                             (tid, sid, val))
+                    log_activity(c, role, "scores.save", t["name"])
                 self.send_json({"ok": True})
                 return
 

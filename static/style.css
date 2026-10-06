@@ -468,6 +468,15 @@ td.num,th.num{text-align:right;font-variant-numeric:tabular-nums}
 .month-nav{display:flex;align-items:center;gap:8px}
 .month-nav .input{min-width:150px}
 
+/* activity log ---------------------------------------------------------- */
+.act-list{display:flex;flex-direction:column}
+.act-row{display:flex;align-items:center;gap:12px;padding:11px 6px;border-bottom:1px dashed var(--line);flex-wrap:wrap;transition:background .16s ease}
+.act-row:last-child{border-bottom:0}
+.act-row:hover{background:rgba(124,92,252,.05);border-radius:12px}
+.act-main{flex:1;min-width:200px;font-size:14px}
+.act-main b{font-weight:600}
+.act-time{font-size:12.4px;color:var(--ink-2);font-variant-numeric:tabular-nums;white-space:nowrap}
+
 /* print ---------------------------------------------------------------- */
 @media print{
   .bg-blobs,.hero,.nav-wrap,.toolbar,.no-print,.btn,#toast-wrap{display:none !important}
