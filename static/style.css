@@ -103,6 +103,11 @@ a{color:var(--violet)}
 }
 
 .boot{min-height:100vh;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:12px;color:var(--ink-2)}
+.boot-tag{max-width:600px;text-align:center;font-size:13.4px;line-height:1.65;margin:2px 0 0}
+.boot-tag b{color:var(--ink)}
+.seo-copy{max-width:720px;margin:0 auto;padding:40px 24px;color:var(--ink)}
+.seo-copy h1{font-size:26px;margin:0 0 14px}
+.seo-copy p{font-size:15px;line-height:1.7;color:var(--ink-2);margin:0 0 12px}
 .boot-logo{font-size:52px;animation:bob 1.4s ease-in-out infinite}
 @keyframes bob{0%,100%{transform:translateY(0)}50%{transform:translateY(-10px)}}
 

@@ -117,6 +117,30 @@ Rules of the dual-mode design:
 Free Postgres instances sleep when idle: the first request after a quiet period
 wakes them (a few seconds), after which everything is fast.
 
+## Get found on Google
+
+Everything crawlers need ships with the app: an indexable title/description with
+`class register` keywords, `robots.txt` + `sitemap.xml` at the canonical address
+`https://class-register-cudp.onrender.com/`, JSON-LD `WebApplication` and `WebSite`
+schema, and crawlable copy on the loading screen plus a `<noscript>` fallback.
+Three steps on your side finish the job:
+
+1. **Deploy the latest commit** on Render (Dashboard → *Manual Deploy* →
+   *Deploy latest commit*) — production must serve the current build.
+2. **Verify in Google Search Console**:
+   - Open [search.google.com/search-console](https://search.google.com/search-console) → *Add property* →
+     **URL prefix** → `https://class-register-cudp.onrender.com/` → Continue.
+   - Pick verification method **HTML tag** and copy its `content` value.
+   - Paste it into `static/index.html`, replacing `REPLACE_WITH_YOUR_GOOGLE_TOKEN`
+     in the `<meta name="google-site-verification" …>` line → commit, push, redeploy
+     → click *Verify*.
+3. **Submit the sitemap**: Search Console → *Sitemaps* →
+   `https://class-register-cudp.onrender.com/sitemap.xml` → *Submit*, then use
+   URL Inspection → *Request indexing* on the home page.
+
+After that, `site:class-register-cudp.onrender.com` lists what Google indexed, and
+searching **Class Register** (or pasting the address itself) finds the app.
+
 ## Tests
 
 ```bash
