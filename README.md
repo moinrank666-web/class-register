@@ -37,16 +37,19 @@ Change them any time from **⚙️ Codes** in the header (admin only).
 Every sign-in, added/removed student, saved score sheet, test change and code change is
 recorded and shown to the admin on the **🕓 Activity** tab.
 
-## Three languages
+## Ten languages
 
-The interface ships in **English · हिंदी (Hindi) · தமிழ் (Tamil)**. Switch via
-**☰ Menu → 🌐 Language**, the **🌐** pill on the sign-in screen, the command palette,
-or by typing `:lang ta` in the roster search bar — the choice is saved per browser and
-applies instantly to every screen, month names and error messages.
+The interface ships in **10 languages**: English · हिंदी (Hindi) · தமிழ் (Tamil) ·
+Español · Français · Deutsch · Português · 中文 (Chinese) · العربية (Arabic) · 日本語 (Japanese).
+Switch via **☰ Menu → 🌐 Language**, the **🌐** pill on the sign-in screen, the command
+palette, or by typing `:lang ta` in the roster search bar — a picker lists all ten in
+their native names. The choice is saved per browser and applies instantly to every
+screen, month names and error messages. Arabic flips the whole layout to right-to-left.
 
-All strings live in `static/i18n.js`: one dictionary per language with ~170 keys and a
+All strings live in `static/i18n.js`: one dictionary per language with 256 keys and a
 `{placeholder}` syntax. Missing keys fall back to English, so a partial translation can
-never break the UI. To add a language, add one dictionary entry and one `MONTHS` list.
+never break the UI. To add a language, add one dictionary entry, one `MONTHS` list and
+one row in `LANGS`.
 
 ## Command menu & hidden commands
 

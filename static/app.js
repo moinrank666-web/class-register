@@ -99,13 +99,32 @@ async function signOut() {
 /* Language toggle — re-renders whatever screen is showing, in the new language. */
 function bindLang() {
   const b = $('#btn-lang'); if (!b) return;
-  b.onclick = () => {
-    setLang(nextLang());
+  b.onclick = openLangPicker;
+}
+
+/* language picker — 10 languages in one modal (works on auth screens too) */
+function openLangPicker() {
+  const cur = getLang();
+  openModal({
+    title: T('lang.pick'),
+    body: `<div class="lang-grid">${(window.LANGS || []).map(([code, native, enName]) => `
+      <button type="button" class="lang-opt${code === cur ? ' on' : ''}" data-l="${code}">
+        <span class="lo-native">${esc(native)}</span>
+        <span class="lo-en">${esc(enName)}</span>
+        ${code === cur ? '<span class="lo-check">✓</span>' : ''}
+      </button>`).join('')}</div>`,
+  });
+  $('#modal-body').addEventListener('click', e => {
+    const b = e.target.closest('button[data-l]'); if (!b) return;
+    const code = b.dataset.l;
     closeModal();
+    if (code === cur) return;
+    setLang(code);
+    toast('🌐 ' + code.toUpperCase());
     if ($('#nav')) renderShell();
     else if ($('#setup-form')) renderSetup();
     else if ($('#login-form')) renderLogin();
-  };
+  });
 }
 
 function authShell(inner) {
@@ -124,7 +143,7 @@ function authShell(inner) {
             <li>🔐 <span>${T('hero.point2')}</span></li>
             <li>📊 <span>${T('hero.point3')}</span></li>
           </ul>
-          <button class="lang-pill on-dark" id="btn-lang">🌐 ${esc(nextLangLabel())}</button>
+          <button class="lang-pill on-dark" id="btn-lang">🌐 ${T('menu.lang')}</button>
         </div>
         <div class="auth-form">${inner}</div>
       </div>
@@ -243,7 +262,7 @@ function renderShell() {
           <div class="brand-mark">📚</div>
           <div>
             <div class="brand-name">Class Register</div>
-            <div class="brand-sub">Attendance &amp; Monthly Performance</div>
+            <div class="brand-sub">${T('brand.sub')}</div>
           </div>
         </div>
         <div class="hero-actions">
@@ -1030,6 +1049,7 @@ function studentHtml(d) {
 /* ------------------------- menu · palette · hidden commands ---------- */
 const IS_MAC = /Mac|iPhone|iPad|iPod/.test(navigator.userAgent || '');
 const PAL_KEYS = IS_MAC ? '⌘K' : 'Ctrl K';
+const langNative = c => { const r = (window.LANGS || []).find(l => l[0] === c); return r ? r[1] : 'EN'; };
 
 function menuHtml() {
   const canAdd = App.role === 'admin' || App.role === 'teacher';
@@ -1043,7 +1063,7 @@ function menuHtml() {
       ${item('print', '🖨️', T('menu.print'))}
     </div>
     <div class="menu-group"><span class="menu-label">${T('menu.prefs')}</span>
-      ${item('lang', '🌐', T('menu.lang'), nextLangLabel())}
+      ${item('lang', '🌐', T('menu.lang'), langNative(getLang()))}
       ${App.role === 'admin' ? item('codes', '⚙️', T('menu.codes')) : ''}
       ${item('help', '', T('cmd.help.title'))}
     </div>
@@ -1065,7 +1085,7 @@ function closeMenu() {
 
 /* one dispatcher for menu items and palette actions */
 function runAction(a) {
-  if (a === 'lang')   { setLang(nextLang()); renderShell(); toast('🌐 ' + getLang().toUpperCase()); return; }
+  if (a === 'lang')   { openLangPicker(); return; }
   if (a === 'print')  { window.print(); return; }
   if (a === 'export') { exportCsv(App.filters.report.month, App.filters.report.grade); return; }
   if (a === 'out')    { signOut(); return; }
@@ -1089,7 +1109,7 @@ function paletteItems() {
     items.push({ g: 'act', icon: '📝', label: T('menu.test'), run: () => runAction('test') });
   items.push({ g: 'act', icon: '⬇️', label: T('menu.export'), run: () => runAction('export') });
   items.push({ g: 'act', icon: '🖨️', label: T('menu.print'), run: () => runAction('print') });
-  items.push({ g: 'prefs', icon: '🌐', label: T('menu.lang'), right: nextLangLabel(), run: () => runAction('lang') });
+  items.push({ g: 'prefs', icon: '🌐', label: T('menu.lang'), right: langNative(getLang()), run: () => runAction('lang') });
   if (App.role === 'admin')
     items.push({ g: 'prefs', icon: '⚙️', label: T('menu.codes'), run: () => runAction('codes') });
   items.push({ g: 'prefs', icon: '', label: T('cmd.help.title'), run: showCmdHelp });
@@ -1224,7 +1244,7 @@ function runCommand(raw) {
       closePalette(); navigate(arg); toast('✓ ' + s); return true;
     }
     case 'lang':
-      if (!['en', 'hi', 'ta'].includes(arg)) return unknownCmd();
+      if (!(window.LANGS || []).some(l => l[0] === arg)) return unknownCmd();
       setLang(arg); closePalette(); renderShell(); toast('✓ ' + s); return true;
     case 'accent':
       if (!applyAccent(arg)) return unknownCmd();
