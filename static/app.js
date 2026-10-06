@@ -35,7 +35,7 @@ const App = {
   role:  sessionStorage.getItem('cr_role')  || null,
   view: 'students',
   filters: {
-    students:   { q: '', grade: '' },
+    students:   { q: '', grade: '', sort: 'grade', sortDir: 1 },
     attendance: { date: todayISO(), grade: '', month: thisMonth() },
     scores:     { month: thisMonth(), grade: '', testId: null },
     report:     { month: thisMonth(), grade: '' },
@@ -87,6 +87,7 @@ function closeModal() { $('#modal-root').innerHTML = ''; document.removeEventLis
 
 /* ------------------------------ auth ------------------------------ */
 async function signOut() {
+  closePalette(); closeMenu();
   const t = App.token;
   App.token = null; App.role = null;
   sessionStorage.removeItem('cr_token');
@@ -247,23 +248,28 @@ function renderShell() {
         </div>
         <div class="hero-actions">
           <span class="role-chip">${T('role.' + (App.role || 'teacher') + '.chip')}</span>
-          <button class="hero-btn lang-btn" id="btn-lang" title="Language">🌐 ${esc(nextLangLabel())}</button>
-          ${App.role === 'admin' ? `<button class="hero-btn" id="btn-settings">${T('shell.codes')}</button>` : ''}
-          <button class="hero-btn" id="btn-logout">${T('shell.signout')}</button>
+          <div class="menu-anchor">
+            <button class="hero-btn menu-btn" id="btn-menu" aria-haspopup="menu" aria-expanded="false">${T('menu.open')}</button>
+            <div class="menu-pop" id="menu-pop" role="menu" hidden>${menuHtml()}</div>
+          </div>
         </div>
       </div>
     </header>
     <div class="nav-wrap">
       <nav class="nav" id="nav">
+        <button class="cmd-pill" id="btn-pal" title="${esc(T('pal.placeholder'))}"><span class="cp-ic">⌕</span><span class="cp-tx">${T('pal.open')}</span><kbd>${PAL_KEYS}</kbd></button>
         ${NAV.filter(n => n.id !== 'activity' || App.role === 'admin')
           .map(n => `<button data-view="${n.id}"><span>${n.icon}</span>${T(n.key)}</button>`).join('')}
       </nav>
     </div>
     <main class="page" id="view"><div class="boot"><div class="boot-logo">⏳</div></div></main>`;
 
-  $('#btn-logout').onclick = signOut;
-  if ($('#btn-settings')) $('#btn-settings').onclick = openCodeModal;
-  bindLang();
+  $('#btn-menu').onclick = e => { e.stopPropagation(); toggleMenu(); };
+  $('#btn-pal').onclick = openPalette;
+  $('#menu-pop').addEventListener('click', e => {
+    const b = e.target.closest('button[data-a]'); if (!b) return;
+    closeMenu(); runAction(b.dataset.a);
+  });
   $('#nav').addEventListener('click', e => {
     const b = e.target.closest('button[data-view]'); if (b) navigate(b.dataset.view);
   });
@@ -325,10 +331,22 @@ async function renderStudents() {
   const canAdd = isAdmin || App.role === 'teacher';
   const newThisMonth = students.filter(s => (s.created_at || '').startsWith(thisMonth())).length;
 
+  // client-side roster sort — headers or the hidden :sort command
+  const dir = f.sortDir === -1 ? -1 : 1;
+  const gnum = g => Number(String(g).replace(/\D/g, '')) || 0;
+  const keyf = {
+    name:  s => String(s.name || '').toLowerCase(),
+    grade: s => gnum(s.grade) * 100000 + (Number(s.roll3) || 0),
+    roll:  s => String(s.roll3 || ''),
+    added: s => String(s.created_at || ''),
+  };
+  const kf = keyf[f.sort] || keyf.grade;
+  students.sort((a, b) => (kf(a) < kf(b) ? -1 : kf(a) > kf(b) ? 1 : 0) * dir ||
+    String(a.name).localeCompare(String(b.name)));
+
   $('#view').innerHTML = `
     <div class="section-head">
       <div><h2>${T('stu.title')}</h2><p>${T('stu.sub')}</p></div>
-      ${canAdd ? `<button class="btn btn-primary no-print" id="btn-add">${T('stu.add')}</button>` : ''}
     </div>
 
     <div class="grid grid-3" style="margin-bottom:18px">
@@ -339,14 +357,17 @@ async function renderStudents() {
 
     <div class="card">
       <div class="toolbar no-print">
-        <input class="input" id="f-q" placeholder="${T('stu.search')}" value="${esc(f.q)}">
+        <div class="search-wrap">
+          <input class="input" id="f-q" placeholder="${T('stu.search')}" value="${esc(f.q)}" autocomplete="off">
+          <div class="cmd-peek" id="cmd-peek" hidden></div>
+        </div>
         <select class="input" id="f-grade">${gradeOptions(grades, f.grade)}</select>
+        <span class="hint-chip">${T('cmd.hint')}</span>
         <div class="spacer"></div>
         <span class="muted" style="font-size:13px">${T('stu.shown', { n: students.length })}</span>
       </div>
       <div class="table-wrap">
-        <table>
-          <thead><tr><th style="width:90px">${T('th.grade')}</th><th style="width:120px">${T('th.roll')}</th><th>${T('th.name')}</th><th style="width:170px">${T('th.added')}</th><th class="no-print" style="width:170px"></th></tr></thead>
+        <table>              <thead><tr><th data-sort="grade" class="${f.sort === 'grade' ? 'on' : ''}" style="width:90px">${T('th.grade')}<i>${sortIc('grade', f)}</i></th><th data-sort="roll" class="${f.sort === 'roll' ? 'on' : ''}" style="width:120px">${T('th.roll')}<i>${sortIc('roll', f)}</i></th><th data-sort="name" class="${f.sort === 'name' ? 'on' : ''}">${T('th.name')}<i>${sortIc('name', f)}</i></th><th data-sort="added" class="no-print${f.sort === 'added' ? ' on' : ''}" style="width:170px">${T('th.added')}<i>${sortIc('added', f)}</i></th><th class="no-print" style="width:170px"></th></tr></thead>
           <tbody id="stu-body">
             ${students.length ? students.map(s => `
               <tr class="clickable" data-id="${s.id}">
@@ -365,10 +386,34 @@ async function renderStudents() {
       </div>
     </div>`;
 
-  if (canAdd) $('#btn-add').onclick = openAddStudent;
   const search = debounce(v => { f.q = v; renderStudents(); }, 220);
-  $('#f-q').addEventListener('input', e => search(e.target.value.trim()));
-  $('#f-q').addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); f.q = e.target.value.trim(); renderStudents(); } });
+  const qEl = $('#f-q');
+  qEl.addEventListener('input', e => {
+    const v = e.target.value.trim();
+    if (v.startsWith(':')) showPeek(v); else { hidePeek(); search(v); }
+  });
+  qEl.addEventListener('keydown', e => {
+    if (e.key === 'Enter') {
+      e.preventDefault();
+      const v = e.target.value.trim();
+      if (v.startsWith(':')) {
+        if (runCommand(v)) { e.target.value = ''; hidePeek(); }
+      } else { f.q = v; renderStudents(); }
+    } else if (e.key === 'Escape') { hidePeek(); e.target.value = f.q; }
+  });
+  const peek = $('#cmd-peek');
+  peek.addEventListener('click', e => {
+    const b = e.target.closest('button[data-cmd]'); if (!b) return;
+    const v = b.dataset.cmd; const el = $('#f-q');
+    if (NO_ARG.has(v)) { if (runCommand(v)) { el.value = ''; hidePeek(); } }
+    else { el.value = v + ' '; el.focus(); showPeek(v); }
+  });
+  $$('th[data-sort]').forEach(th => th.addEventListener('click', () => {
+    const k = th.dataset.sort;
+    if (f.sort === k) f.sortDir = f.sortDir === -1 ? 1 : -1;
+    else { f.sort = k; f.sortDir = 1; }
+    renderStudents();
+  }));
   $('#f-grade').addEventListener('change', e => { f.grade = e.target.value; renderStudents(); });
 
   $('#stu-body').addEventListener('click', async e => {
@@ -601,7 +646,6 @@ async function renderScores() {
   $('#view').innerHTML = `
     <div class="section-head">
       <div><h2>${T('sc.title')}</h2><p>${T('sc.sub')}</p></div>
-      ${App.role !== 'observer' ? `<button class="btn btn-primary no-print" id="btn-new-test">${T('sc.new')}</button>` : ''}
     </div>
 
     <div class="card">
@@ -632,8 +676,6 @@ async function renderScores() {
 
   $('#t-month').addEventListener('change', e => { f.month = e.target.value || thisMonth(); f.testId = null; renderScores(); });
   $('#t-grade').addEventListener('change', e => { f.grade = e.target.value; renderScores(); });
-  if ($('#btn-new-test')) $('#btn-new-test').onclick = openNewTest;
-
   $('#test-grid').addEventListener('click', async e => {
     const card = e.target.closest('.test-card'); if (!card) return;
     const id = Number(card.dataset.id);
@@ -796,10 +838,6 @@ async function renderReport() {
   $('#view').innerHTML = `
     <div class="section-head">
       <div><h2>${T('rep.title')}</h2><p>${T('rep.sub', { m: esc(monthLabel(f.month)) })}</p></div>
-      <div class="hero-actions no-print" style="gap:10px">
-        <button class="btn btn-ghost" id="btn-print">${T('rep.print')}</button>
-        <button class="btn btn-mint" id="btn-csv">${T('rep.csv')}</button>
-      </div>
     </div>
 
     <div class="toolbar no-print">
@@ -854,8 +892,6 @@ async function renderReport() {
 
   $('#r-month').addEventListener('change', e => { f.month = e.target.value || thisMonth(); renderReport(); });
   $('#r-grade').addEventListener('change', e => { f.grade = e.target.value; renderReport(); });
-  $('#btn-print').addEventListener('click', () => window.print());
-  $('#btn-csv').addEventListener('click', () => exportCsv(f.month, f.grade));
   $('#rep-body').addEventListener('click', e => {
     const row = e.target.closest('tr[data-id]'); if (row) openStudent(Number(row.dataset.id));
   });
@@ -982,6 +1018,239 @@ function studentHtml(d) {
     </div>`;
 }
 
+/* ------------------------- menu · palette · hidden commands ---------- */
+const IS_MAC = /Mac|iPhone|iPad|iPod/.test(navigator.userAgent || '');
+const PAL_KEYS = IS_MAC ? '⌘K' : 'Ctrl K';
+
+function menuHtml() {
+  const canAdd = App.role === 'admin' || App.role === 'teacher';
+  const item = (a, icon, label, right) =>
+    `<button type="button" data-a="${a}" role="menuitem"><span class="mi-ic">${icon}</span><span>${label}</span>${right ? `<kbd>${esc(right)}</kbd>` : ''}</button>`;
+  return `
+    <div class="menu-group"><span class="menu-label">${T('menu.actions')}</span>
+      ${canAdd ? item('add', '➕', T('menu.add')) : ''}
+      ${App.role !== 'observer' ? item('test', '📝', T('menu.test')) : ''}
+      ${item('export', '⬇️', T('menu.export'))}
+      ${item('print', '🖨️', T('menu.print'))}
+    </div>
+    <div class="menu-group"><span class="menu-label">${T('menu.prefs')}</span>
+      ${item('lang', '🌐', T('menu.lang'), nextLangLabel())}
+      ${App.role === 'admin' ? item('codes', '⚙️', T('menu.codes')) : ''}
+      ${item('help', '', T('cmd.help.title'))}
+    </div>
+    <div class="menu-group">
+      ${item('out', '⎋', T('menu.out'))}
+    </div>`;
+}
+
+function toggleMenu() {
+  const p = $('#menu-pop'); if (!p) return;
+  p.hidden = !p.hidden;
+  $('#btn-menu').setAttribute('aria-expanded', String(!p.hidden));
+}
+function closeMenu() {
+  const p = $('#menu-pop'); if (!p || p.hidden) return;
+  p.hidden = true;
+  const b = $('#btn-menu'); if (b) b.setAttribute('aria-expanded', 'false');
+}
+
+/* one dispatcher for menu items and palette actions */
+function runAction(a) {
+  if (a === 'lang')   { setLang(nextLang()); renderShell(); toast('🌐 ' + getLang().toUpperCase()); return; }
+  if (a === 'print')  { window.print(); return; }
+  if (a === 'export') { exportCsv(App.filters.report.month, App.filters.report.grade); return; }
+  if (a === 'out')    { signOut(); return; }
+  if (a === 'help')   { showCmdHelp(); return; }
+  if (a === 'codes')  { if (App.role === 'admin') openCodeModal(); return; }
+  if (a === 'add')    { if (App.role === 'admin' || App.role === 'teacher') openAddStudent(); return; }
+  if (a === 'test')   { if (App.role !== 'observer') openNewTest(); return; }
+  if (NAV.some(n => n.id === a)) {
+    if (a === 'activity' && App.role !== 'admin') return;
+    closePalette(); navigate(a);
+  }
+}
+
+function paletteItems() {
+  const items = [];
+  NAV.filter(n => n.id !== 'activity' || App.role === 'admin')
+     .forEach(n => items.push({ g: 'nav', icon: n.icon, label: T(n.key), run: () => runAction(n.id) }));
+  if (App.role === 'admin' || App.role === 'teacher')
+    items.push({ g: 'act', icon: '➕', label: T('menu.add'), run: () => runAction('add') });
+  if (App.role !== 'observer')
+    items.push({ g: 'act', icon: '📝', label: T('menu.test'), run: () => runAction('test') });
+  items.push({ g: 'act', icon: '⬇️', label: T('menu.export'), run: () => runAction('export') });
+  items.push({ g: 'act', icon: '🖨️', label: T('menu.print'), run: () => runAction('print') });
+  items.push({ g: 'prefs', icon: '🌐', label: T('menu.lang'), right: nextLangLabel(), run: () => runAction('lang') });
+  if (App.role === 'admin')
+    items.push({ g: 'prefs', icon: '⚙️', label: T('menu.codes'), run: () => runAction('codes') });
+  items.push({ g: 'prefs', icon: '', label: T('cmd.help.title'), run: showCmdHelp });
+  items.push({ g: 'prefs', icon: '⎋', label: T('menu.out'), run: () => runAction('out') });
+  return items;
+}
+
+function openPalette() {
+  if (!$('#nav') || $('#pal-back')) return;
+  closeMenu();
+  $('#palette-root').innerHTML = `
+    <div class="pal-back" id="pal-back">
+      <div class="pal" role="dialog" aria-modal="true" aria-label="${esc(T('pal.open'))}">
+        <div class="pal-input"><span>⌕</span><input id="pal-q" placeholder="${esc(T('pal.placeholder'))}" autocomplete="off"><kbd>esc</kbd></div>
+        <div class="pal-list" id="pal-list"></div>
+        <div class="pal-foot">${T('pal.hint')}</div>
+      </div>
+    </div>`;
+  let flat = [], idx = 0;
+  const list = $('#pal-list');
+  const draw = () => {
+    const q = $('#pal-q').value.trim().toLowerCase();
+    const hits = paletteItems().filter(i => !q || i.label.toLowerCase().includes(q));
+    flat = hits;
+    if (idx >= hits.length) idx = hits.length - 1;
+    if (idx < 0) idx = 0;
+    const groups = [['nav', 'pal.group.nav'], ['act', 'pal.group.act'], ['prefs', 'pal.group.prefs']];
+    list.innerHTML = hits.length ? groups.map(([g, key]) => {
+      const rows = hits.filter(i => i.g === g);
+      if (!rows.length) return '';
+      return `<div class="pal-g">${T(key)}</div>` + rows.map(i => {
+        const k = hits.indexOf(i);
+        return `<button type="button" class="pal-item${k === idx ? ' on' : ''}" data-k="${k}">` +
+          `<span class="pi-ic">${i.icon || ''}</span><span class="pi-tx">${esc(i.label)}</span>` +
+          `${i.right ? `<kbd>${esc(i.right)}</kbd>` : ''}</button>`;
+      }).join('');
+    }).join('') : `<div class="pal-none">${T('pal.empty')}</div>`;
+  };
+  const scrollOn = () => { const on = list.querySelector('.pal-item.on'); if (on) on.scrollIntoView({ block: 'nearest' }); };
+  const run = k => { const it = flat[k]; if (!it) return; closePalette(); it.run(); };
+  $('#pal-q').addEventListener('input', () => { idx = 0; draw(); });
+  $('#pal-q').addEventListener('keydown', e => {
+    if (e.key === 'ArrowDown') { e.preventDefault(); if (flat.length) { idx = (idx + 1) % flat.length; draw(); scrollOn(); } }
+    else if (e.key === 'ArrowUp') { e.preventDefault(); if (flat.length) { idx = (idx - 1 + flat.length) % flat.length; draw(); scrollOn(); } }
+    else if (e.key === 'Enter') { e.preventDefault(); run(idx); }
+    else if (e.key === 'Escape') { e.preventDefault(); closePalette(); }
+  });
+  list.addEventListener('click', e => { const b = e.target.closest('.pal-item'); if (b) run(Number(b.dataset.k)); });
+  $('#pal-back').addEventListener('click', e => { if (e.target.id === 'pal-back') closePalette(); });
+  draw();
+  $('#pal-q').focus();
+}
+function closePalette() { const r = $('#palette-root'); if (r) r.innerHTML = ''; }
+
+/* accent themes — hidden :accent command, persisted per browser */
+const ACCENTS = {
+  violet: { v: '#7C5CFC', d: '#6544E8', l: '#A78BFA', g: 'linear-gradient(135deg,#6D4AFF 0%,#9B7BFF 45%,#FF6B9D 100%)', t: 'linear-gradient(115deg,#6D4AFF 0%,#A87CFF 50%,#FF6B9D 100%)', r: 'rgba(124,92,252,.18)' },
+  rose:   { v: '#FF5C7A', d: '#E13A5B', l: '#FF9AB0', g: 'linear-gradient(135deg,#FF4D6D 0%,#FF7BA3 50%,#FFB88C 100%)', t: 'linear-gradient(115deg,#FF4D6D 0%,#FF8AA6 50%,#FFB88C 100%)', r: 'rgba(255,92,122,.18)' },
+  mint:   { v: '#2EC4B6', d: '#0E8C7E', l: '#6FE3D6', g: 'linear-gradient(135deg,#0FA396 0%,#2EC4B6 55%,#8CE8DC 100%)', t: 'linear-gradient(115deg,#0E8C7E 0%,#2EC4B6 55%,#8CE8DC 100%)', r: 'rgba(46,196,182,.2)' },
+  ocean:  { v: '#5B8DEF', d: '#2B5FD9', l: '#93B7FF', g: 'linear-gradient(135deg,#2B5FD9 0%,#5B8DEF 50%,#8F7BFC 100%)', t: 'linear-gradient(115deg,#2B5FD9 0%,#5B8DEF 50%,#A78BFA 100%)', r: 'rgba(91,141,239,.2)' },
+  sun:    { v: '#F2A93B', d: '#D97706', l: '#FFC94A', g: 'linear-gradient(135deg,#E8930C 0%,#FFC94A 50%,#FF8A5B 100%)', t: 'linear-gradient(115deg,#E8930C 0%,#FFC94A 50%,#FF8A5B 100%)', r: 'rgba(242,169,59,.22)' },
+};
+function applyAccent(name) {
+  const a = ACCENTS[name]; if (!a) return false;
+  const r = document.documentElement.style;
+  r.setProperty('--violet', a.v); r.setProperty('--violet-d', a.d); r.setProperty('--violet-l', a.l);
+  r.setProperty('--grad', a.g); r.setProperty('--grad-text', a.t); r.setProperty('--ring', a.r);
+  try { localStorage.setItem('cr_accent', name); } catch (_) { /* private mode */ }
+  return true;
+}
+function loadAccent() {
+  try { const n = localStorage.getItem('cr_accent'); if (n && ACCENTS[n]) applyAccent(n); } catch (_) { /* ignore */ }
+}
+
+/* the hidden command bar — type it into the roster search field */
+const CMD_META = [
+  { s: ':help',   d: 'cmd.desc.help' },
+  { s: ':nav',    d: 'cmd.desc.nav' },
+  { s: ':lang',   d: 'cmd.desc.lang' },
+  { s: ':accent', d: 'cmd.desc.accent' },
+  { s: ':sort',   d: 'cmd.desc.sort' },
+  { s: ':grade',  d: 'cmd.desc.grade' },
+  { s: ':add',    d: 'cmd.desc.add',  gate: 'edit' },
+  { s: ':test',   d: 'cmd.desc.test', gate: 'edit' },
+  { s: ':codes',  d: 'cmd.desc.codes', gate: 'admin' },
+  { s: ':export', d: 'cmd.desc.export' },
+  { s: ':print',  d: 'cmd.desc.print' },
+  { s: ':clear',  d: 'cmd.desc.clear' },
+];
+const NO_ARG = new Set([':help', ':add', ':test', ':codes', ':export', ':print', ':clear']);
+const cmdLocked = m => (m.gate === 'admin' && App.role !== 'admin') ||
+  (m.gate === 'edit' && !(App.role === 'admin' || App.role === 'teacher'));
+const sortIc = (k, f) => (f.sort !== k ? ' ⇅' : f.sortDir === -1 ? ' ▼' : ' ▲');
+
+function showPeek(typed) {
+  const peek = $('#cmd-peek'); if (!peek) return;
+  const t = typed.toLowerCase();
+  const hits = CMD_META.filter(m => m.s.startsWith(t));
+  peek.innerHTML = hits.map(m => `
+    <button type="button" data-cmd="${m.s}"><code>${m.s}</code><span>${esc(T(m.d))}</span>${cmdLocked(m) ? '<em>🔒</em>' : ''}</button>`).join('');
+  peek.hidden = !hits.length;
+}
+function hidePeek() { const p = $('#cmd-peek'); if (p) { p.hidden = true; p.innerHTML = ''; } }
+
+function showCmdHelp() {
+  openModal({
+    title: T('cmd.help.title'),
+    body: `<p class="muted" style="margin:0 0 14px;font-size:13.4px">${esc(T('cmd.help.sub'))}</p>
+      <div class="cmd-help">${CMD_META.map(m => `
+        <div class="cmd-row${cmdLocked(m) ? ' locked' : ''}"><code>${m.s}</code><span>${esc(T(m.d))}</span>${cmdLocked(m) ? `<em>${T('cmd.locked')}</em>` : ''}</div>`).join('')}</div>`,
+  });
+}
+
+const unknownCmd = () => { warn(T('cmd.unknown')); return true; };
+const lockedCmd  = () => { warn(T('cmd.locked')); return true; };
+
+function runCommand(raw) {
+  const s = String(raw || '').trim();
+  if (!s.startsWith(':')) return false;
+  const parts = s.slice(1).split(/\s+/).filter(Boolean);
+  const cmd = (parts[0] || '').toLowerCase();
+  const arg = (parts[1] || '').toLowerCase();
+  const isAdmin = App.role === 'admin';
+  const canEdit = isAdmin || App.role === 'teacher';
+  const goStudents = () => { if (App.view !== 'students') navigate('students'); else renderStudents(); };
+  switch (cmd) {
+    case 'help': showCmdHelp(); return true;
+    case 'nav': {
+      const views = ['students', 'attendance', 'scores', 'report', 'activity'];
+      if (!views.includes(arg)) return unknownCmd();
+      if (arg === 'activity' && !isAdmin) return lockedCmd();
+      closePalette(); navigate(arg); toast('✓ ' + s); return true;
+    }
+    case 'lang':
+      if (!['en', 'hi', 'ta'].includes(arg)) return unknownCmd();
+      setLang(arg); closePalette(); renderShell(); toast('✓ ' + s); return true;
+    case 'accent':
+      if (!applyAccent(arg)) return unknownCmd();
+      toast('✓ ' + s); return true;
+    case 'sort':
+      if (!['name', 'grade', 'roll', 'added'].includes(arg)) return unknownCmd();
+      App.filters.students.sort = arg; App.filters.students.sortDir = 1;
+      goStudents(); toast('✓ ' + s); return true;
+    case 'grade':
+      if (arg && arg !== 'all') App.filters.students.grade = arg;
+      else App.filters.students.grade = '';
+      goStudents(); toast('✓ ' + s); return true;
+    case 'add':   if (!canEdit) return lockedCmd(); openAddStudent(); return true;
+    case 'test':  if (!canEdit) return lockedCmd(); openNewTest(); return true;
+    case 'codes': if (!isAdmin) return lockedCmd(); openCodeModal(); return true;
+    case 'export': exportCsv(App.filters.report.month, App.filters.report.grade); return true;
+    case 'print': window.print(); return true;
+    case 'clear':
+      App.filters.students = { q: '', grade: '', sort: 'grade', sortDir: 1 };
+      goStudents(); toast('✓ ' + s); return true;
+    default: return unknownCmd();
+  }
+}
+
+/* one-time global listeners: palette shortcut, menu dismissal */
+document.addEventListener('keydown', e => {
+  if ((e.metaKey || e.ctrlKey) && !e.altKey && String(e.key).toLowerCase() === 'k') {
+    if ($('#nav')) { e.preventDefault(); if ($('#pal-back')) closePalette(); else openPalette(); }
+  } else if (e.key === 'Escape') {
+    closeMenu();
+    if ($('#pal-back')) closePalette();
+  }
+});
+document.addEventListener('click', e => { if (!e.target.closest('.menu-anchor')) closeMenu(); });
+
 /* ------------------------------ boot ------------------------------ */
 function detectForcedDark() {
   // Chrome may auto-darken light sites; when that happens we swap in a curated palette.
@@ -997,6 +1266,7 @@ function detectForcedDark() {
 
 async function boot() {
   detectForcedDark();
+  loadAccent();
   document.documentElement.lang = getLang();
   const bootP = document.querySelector('#app .boot p');
   if (bootP) bootP.textContent = T('shell.loading');

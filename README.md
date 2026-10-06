@@ -39,19 +39,47 @@ recorded and shown to the admin on the **🕓 Activity** tab.
 
 ## Three languages
 
-The interface ships in **English · हिंदी (Hindi) · தமிழ் (Tamil)**. Tap the **🌐** pill in
-the header (or on the sign-in screen) to switch — the choice is saved per browser and
+The interface ships in **English · हिंदी (Hindi) · தமிழ் (Tamil)**. Switch via
+**☰ Menu → 🌐 Language**, the **🌐** pill on the sign-in screen, the command palette,
+or by typing `:lang ta` in the roster search bar — the choice is saved per browser and
 applies instantly to every screen, month names and error messages.
 
 All strings live in `static/i18n.js`: one dictionary per language with ~170 keys and a
 `{placeholder}` syntax. Missing keys fall back to English, so a partial translation can
 never break the UI. To add a language, add one dictionary entry and one `MONTHS` list.
 
+## Command menu & hidden commands
+
+All actions live in two menus instead of loose buttons:
+
+- **☰ Menu** (top right) — add student, new test, export CSV, print, switch language,
+  change access codes (admin), sign out.
+- **Commands** pill in the sticky nav — or press **Ctrl K / ⌘K** — for a searchable
+  command palette (pages, actions, preferences; ↑↓ moves, ↵ runs, esc closes).
+
+Type **`:`** into the roster search bar to open the hidden command bar, then press ↵.
+`:help` shows the same cheat sheet inside the app:
+
+| Command | What it does |
+|---|---|
+| `:help` | Show the cheat sheet |
+| `:nav students\|attendance\|scores\|report\|activity` | Jump to a page (`activity` is admin-only) |
+| `:lang en\|hi\|ta` | Switch language |
+| `:accent violet\|rose\|mint\|ocean\|sun` | Recolour the whole app (saved per browser) |
+| `:sort name\|grade\|roll\|added` | Sort the roster (same as clicking a column header) |
+| `:grade 5` / `:grade all` | Filter the roster by grade |
+| `:add` / `:test` | Add a student / create a test (admin + teacher) |
+| `:codes` | Open access codes (**admin only**) |
+| `:export` / `:print` / `:clear` | Download CSV / print / reset search + filters |
+
+Commands respect the signed-in role: a teacher or observer typing an admin command
+only sees “Admin only”, and locked entries show a 🔒 in the suggestions.
+
 ## What each screen does
 
 | Screen | What happens |
 |---|---|
-| 🎓 Students | Add **name, grade, and the last 3 digits of the roll number**. Stored in an orderly table sorted by grade, then roll (`5-042`). Duplicate grade + roll pairs are rejected. |
+| 🎓 Students | Add **name, grade, and the last 3 digits of the roll number**. Stored in an orderly table sorted by grade, then roll (`5-042`) — click any column header to re-sort. Duplicate grade + roll pairs are rejected. |
 | 🗓️ Attendance | Pick a date, tap Present / Absent / Late per student (or "All present"), save. Monthly summary shows present/absent/late counts and attendance %. |
 | 📝 Test Scores | Create a test for a month (name, max marks, date), then enter each student's score. Live totals, % and letter grade appear as you type; blanks mean "not taken". |
 | 📊 Reports | Every test as a column, with totals, %, letter grade, rank and attendance for the month. Click a row for the full student record. Export CSV or print. |
