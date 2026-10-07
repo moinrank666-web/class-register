@@ -225,6 +225,21 @@ def main():
     ranks = sorted(r["rank"] for r in rep["rows"] if r["rank"] is not None)
     check("ranks are 1..n", ranks == list(range(1, len(ranks) + 1)), str(ranks))
 
+    tr = rep.get("trend") or []
+    check("report trend spans 12 months", len(tr) == 12, str(len(tr)))
+    check("trend window ends at requested month",
+          bool(tr) and tr[-1]["month"] == "2026-10", str(tr[-1] if tr else None))
+    check("trend starts 11 months back",
+          bool(tr) and tr[0]["month"] == "2025-11", str(tr[0] if tr else None))
+    check("trend percent = (present+late)/marked",
+          bool(tr) and tr[-1]["percent"] == 75.0, str(tr[-1] if tr else None))
+    check("trend marks months without data as null",
+          all(x["percent"] is None for x in tr[:-1]), str([x["percent"] for x in tr]))
+    tr5 = (call("GET", "/api/report?month=2026-10&grade=5", token=A).get("trend") or [])
+    last5 = tr5[-1] if tr5 else None
+    check("trend honours grade filter",
+          last5 is not None and last5["percent"] == 66.7, str(last5))
+
     print("student detail")
     det = call("GET", f"/api/student?id={by_roll['042']}", token=A)
     check("detail profile", det["student"]["roll3"] == "042")

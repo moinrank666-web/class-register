@@ -895,6 +895,95 @@ async function renderScoreEntry(testId) {
 const letter = p => (p >= 90 ? 'A+' : p >= 80 ? 'A' : p >= 70 ? 'B+' : p >= 60 ? 'B' : p >= 50 ? 'C' : p >= 40 ? 'D' : 'F');
 
 /* ------------------------------ reports ------------------------------ */
+/* Animated monthly attendance trend — inline SVG, CSS-driven draw-in. */
+function trendCard(trend) {
+  const hasData = trend.some(p => p.percent !== null);
+  const body = hasData ? (() => {
+    const W = 760, H = 250, padL = 46, padR = 16, padT = 24, padB = 36;
+    const n = trend.length;
+    const px = i => padL + (n <= 1 ? (W - padL - padR) / 2
+      : i * (W - padL - padR) / (n - 1));
+    const py = v => padT + (100 - v) / 100 * (H - padT - padB);
+    const names = monthNames();
+    const short = full => full.length > 4 ? full.slice(0, 3) : full;
+    const mname = p => {
+      const mi = Number(p.month.slice(5, 7)) - 1;
+      return names[mi] || window.MONTHS.en[mi] || p.month;
+    };
+
+    // consecutive non-null runs → line segments (gaps stay empty)
+    const segs = []; let cur = [];
+    trend.forEach((p, i) => {
+      if (p.percent === null) { if (cur.length) segs.push(cur); cur = []; }
+      else cur.push(i);
+    });
+    if (cur.length) segs.push(cur);
+
+    const linePath = idxs => {
+      let d = `M ${px(idxs[0]).toFixed(1)} ${py(trend[idxs[0]].percent).toFixed(1)}`;
+      for (let k = 1; k < idxs.length; k++) {
+        const x0 = px(idxs[k - 1]), y0 = py(trend[idxs[k - 1]].percent);
+        const x1 = px(idxs[k]), y1 = py(trend[idxs[k]].percent);
+        const mx = ((x0 + x1) / 2).toFixed(1);
+        d += ` C ${mx} ${y0.toFixed(1)}, ${mx} ${y1.toFixed(1)}, ${x1.toFixed(1)} ${y1.toFixed(1)}`;
+      }
+      return d;
+    };
+
+    const grid = [0, 25, 50, 75, 100].map(g =>
+      `<line x1="${padL}" y1="${py(g)}" x2="${W - padR}" y2="${py(g)}"></line>` +
+      (g % 50 === 0 ? `<text class="trend-lab" x="${padL - 9}" y="${py(g) + 4}">${g}%</text>` : '')
+    ).join('');
+
+    const lines = segs.filter(s => s.length >= 2).map(s =>
+      `<path class="trend-area" d="${linePath(s)} L ${px(s[s.length - 1]).toFixed(1)} ${py(0)} L ${px(s[0]).toFixed(1)} ${py(0)} Z"></path>` +
+      `<path class="trend-line" pathLength="1" d="${linePath(s)}"></path>`
+    ).join('');
+
+    const lastIdx = trend.reduce((acc, p, i) => p.percent !== null ? i : acc, -1);
+    const dots = trend.map((p, i) => {
+      if (p.percent === null) return '';
+      const cx = px(i).toFixed(1), cy = py(p.percent).toFixed(1);
+      return `<g class="trend-pt${i === lastIdx ? ' trend-last' : ''}" style="--i:${i}">
+        <title>${esc(mname(p))} ${esc(p.month.slice(0, 4))} — ${p.percent}%</title>
+        <circle class="trend-hit" cx="${cx}" cy="${cy}" r="15"></circle>
+        <circle class="trend-dot" cx="${cx}" cy="${cy}" r="4.5"></circle>
+        <text class="trend-val" x="${cx}" y="${Number(cy) - 12}">${p.percent}%</text>
+      </g>`;
+    }).join('');
+
+    const xlabels = trend.map((p, i) =>
+      `<text class="trend-x" x="${px(i).toFixed(1)}" y="${H - padB + 22}">${esc(short(mname(p)))}</text>`
+    ).join('');
+
+    return `<svg class="trend-svg" viewBox="0 0 ${W} ${H}" role="img" aria-label="${esc(T('rep.trend'))}">
+      <defs>
+        <linearGradient id="trendStroke" x1="0" y1="0" x2="1" y2="0">
+          <stop offset="0" stop-color="#6D4AFF"></stop><stop offset="1" stop-color="#FF6B9D"></stop>
+        </linearGradient>
+        <linearGradient id="trendFill" x1="0" y1="0" x2="0" y2="1">
+          <stop offset="0" stop-color="#8B5CF6" stop-opacity=".34"></stop>
+          <stop offset="1" stop-color="#FF6B9D" stop-opacity="0"></stop>
+        </linearGradient>
+      </defs>
+      <g class="trend-grid">${grid}</g>
+      ${lines}${dots}${xlabels}
+    </svg>`;
+  })()
+  : `<div class="empty"><span class="emoji">📭</span><b>${T('att.empty2')}</b>${T('att.empty2Hint')}</div>`;
+
+  return `
+    <div class="card" style="margin-bottom:18px">
+      <div class="card-title">
+        <div>
+          <h3>${T('rep.trend')}</h3>
+          <p class="muted" style="margin:5px 0 0;font-size:13.4px">${T('rep.trendSub')}</p>
+        </div>
+      </div>
+      ${body}
+    </div>`;
+}
+
 async function renderReport() {
   const f = App.filters.report;
   let report, grades;
@@ -926,6 +1015,8 @@ async function renderReport() {
       ${stat('m', T('stat.avg'), report.class.average === null ? '—' : pctText(report.class.average), T('stat.avgNote', { n: report.class.tested }), '📈')}
       ${stat('s', T('stat.highest'), report.class.highest === null || report.class.highest === undefined ? '—' : pctText(report.class.highest), T('stat.highestNote'), '🏆')}
     </div>
+
+    ${report.trend && report.trend.length ? trendCard(report.trend) : ''}
 
     <div class="card">
       <div class="card-title"><h3>${T('rep.card', { m: esc(monthLabel(f.month)) })}</h3></div>

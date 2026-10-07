@@ -517,6 +517,44 @@ def attendance_summary(conn, month, grade=None):
     return out
 
 
+def attendance_trend(conn, end_month, grade=None, months=12):
+    """Class attendance for each of the `months` months ending at end_month (inclusive).
+    Months with no marked days are returned with percent=None so charts can show gaps."""
+    y, mo = int(end_month[:4]), int(end_month[5:7])
+    end_total = y * 12 + (mo - 1)
+    start_total = end_total - (months - 1)
+    start_month = f"{start_total // 12:04d}-{start_total % 12 + 1:02d}"
+    grade_cond = " AND s.grade = ?" if grade else ""
+    args = [start_month, end_month] + ([grade] if grade else [])
+    rows = conn.execute(
+        f"""
+        SELECT substr(a.date,1,7) AS m,
+               SUM(CASE WHEN a.status='present' THEN 1 ELSE 0 END) AS present,
+               SUM(CASE WHEN a.status='absent'  THEN 1 ELSE 0 END) AS absent,
+               SUM(CASE WHEN a.status='late'    THEN 1 ELSE 0 END) AS late,
+               COUNT(*) AS marked
+        FROM attendance a JOIN students s ON s.id = a.student_id
+        WHERE substr(a.date,1,7) BETWEEN ? AND ?{grade_cond}
+        GROUP BY substr(a.date,1,7)
+        """, tuple(args)).fetchall()
+    by_month = {r["m"]: r for r in rows}
+    out = []
+    for i in range(months):
+        total = start_total + i
+        key = f"{total // 12:04d}-{total % 12 + 1:02d}"
+        r = by_month.get(key)
+        if r:
+            marked = r["marked"]
+            out.append({"month": key, "marked": marked, "present": r["present"],
+                        "absent": r["absent"], "late": r["late"],
+                        "percent": round(100.0 * (r["present"] + r["late"]) / marked, 1)
+                        if marked else None})
+        else:
+            out.append({"month": key, "marked": 0, "present": 0, "absent": 0,
+                        "late": 0, "percent": None})
+    return out
+
+
 def build_report(conn, month, grade=None):
     students = list_students(conn, grade=grade)
     tests = [dict(r) for r in conn.execute(
@@ -572,7 +610,8 @@ def build_report(conn, month, grade=None):
         "highest": max(scored) if scored else None,
         "tests": len(tests),
     }
-    return {"month": month, "grade": grade, "tests": tests, "rows": rows, "class": class_stats}
+    return {"month": month, "grade": grade, "tests": tests, "rows": rows,
+            "class": class_stats, "trend": attendance_trend(conn, month, grade=grade)}
 
 
 def student_detail(conn, student_id):
