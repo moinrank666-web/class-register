@@ -6,6 +6,7 @@ import json
 import sys
 import urllib.error
 import urllib.request
+import xml.etree.ElementTree as ET
 
 BASE = sys.argv[1] if len(sys.argv) > 1 else "http://127.0.0.1:8765"
 ADMIN_CODE = "admin-pass-1"
@@ -47,6 +48,30 @@ def main():
     print("static")
     html = call("GET", "/")
     check("index.html served", isinstance(html, str) and "Academic Ledger" in html)
+
+    print("indexing")
+    check("index declares canonical URL", 'rel="canonical"' in html)
+    check("index allows indexing", 'name="robots"' in html and "index, follow" in html)
+    check("index has Search Console token slot", "google-site-verification" in html)
+    check("index ships JSON-LD schema", html.count("application/ld+json") >= 2)
+    rb = call("GET", "/robots.txt")
+    check("robots.txt points at sitemap",
+          isinstance(rb, str) and
+          "Sitemap: https://class-register-cudp.onrender.com/sitemap.xml" in rb)
+    sm = call("GET", "/sitemap.xml")
+    locs = []
+    if isinstance(sm, str):
+        try:
+            root = ET.fromstring(sm)
+            ns = "{http://www.sitemaps.org/schemas/sitemap/0.9}"
+            for u in root.findall(ns + "url"):
+                loc = u.find(ns + "loc")
+                if loc is not None and loc.text:
+                    locs.append(loc.text)
+        except ET.ParseError:
+            locs = []
+    check("sitemap.xml valid, points at canonical home",
+          locs == ["https://class-register-cudp.onrender.com/"], str(locs))
 
     print("status / setup")
     st = call("GET", "/api/status")
