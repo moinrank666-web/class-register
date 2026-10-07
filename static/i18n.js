@@ -1,4 +1,4 @@
-/* Class Register — internationalisation (English · हिंदी · தமிழ்)
+/* Academic Ledger — internationalisation (English · हिंदी · தமிழ்)
    Zero-dependency. Exposes window.T(key, vars), window.getLang/setLang, window.MONTHS.
    Missing keys fall back to English, then to the key itself — a gap never breaks the UI. */
 (() => {

@@ -799,7 +799,7 @@ class Handler(BaseHTTPRequestHandler):
 
         # --- public ---
         if method == "GET" and path == "/api/status":
-            self.send_json({"setup_required": setup_required(), "app": "Attendance Register"})
+            self.send_json({"setup_required": setup_required(), "app": "Academic Ledger"})
             return
 
         if method == "POST" and path == "/api/setup":

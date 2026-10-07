@@ -1,5 +1,5 @@
 /* =======================================================================
-   Class Register — Canva-inspired design system
+   Academic Ledger — Canva-inspired design system
    ======================================================================= */
 
 /* Local fonts — no external requests, works offline */
@@ -732,3 +732,43 @@ html.forced-dark .lo-check{color:#C9BCFF}
   thead th{background:#F1EEFF !important;-webkit-print-color-adjust:exact;print-color-adjust:exact}
   *{-webkit-print-color-adjust:exact;print-color-adjust:exact}
 }
+
+/* ===== DYNAMIC POLISH — sheens, count-ups, live clock, staggered rows == */
+.btn-primary{position:relative;overflow:hidden}
+.btn-primary::after{
+  content:"";position:absolute;top:0;bottom:0;left:-55%;width:42%;
+  background:linear-gradient(100deg,transparent,rgba(255,255,255,.5),transparent);
+  transform:skewX(-18deg);transition:left .6s ease;pointer-events:none
+}
+.btn-primary:hover::after{left:120%}
+
+/* stat cards — a light sheen sweeps across on hover */
+.stat::after{
+  content:"";position:absolute;top:-10%;bottom:-10%;left:-50%;width:38%;
+  background:linear-gradient(100deg,transparent,rgba(255,255,255,.55),transparent);
+  transform:skewX(-16deg);opacity:0;transition:left .7s ease,opacity .15s ease;pointer-events:none
+}
+.stat:hover::after{left:125%;opacity:1}
+
+/* nav — the active pill breathes gently */
+@keyframes navPulse{0%,100%{box-shadow:0 10px 24px rgba(109,74,255,.42)}50%{box-shadow:0 13px 30px rgba(109,74,255,.62)}}
+.nav button.active{animation:navPulse 2.8s ease-in-out infinite}
+
+/* table rows — staggered fade-in whenever data (re)renders */
+@keyframes rowIn{from{opacity:0;transform:translateY(7px)}to{opacity:1;transform:none}}
+#view tbody tr{animation:rowIn .32s ease both}
+#view tbody tr:nth-child(1){animation-delay:.03s}
+#view tbody tr:nth-child(2){animation-delay:.06s}
+#view tbody tr:nth-child(3){animation-delay:.09s}
+#view tbody tr:nth-child(4){animation-delay:.12s}
+#view tbody tr:nth-child(5){animation-delay:.15s}
+#view tbody tr:nth-child(6){animation-delay:.18s}
+#view tbody tr:nth-child(7){animation-delay:.21s}
+#view tbody tr:nth-child(8){animation-delay:.24s}
+
+/* attendance bars grow out to their value */
+@keyframes barGrow{from{width:0}}
+.bar > i{animation:barGrow .8s cubic-bezier(.25,.8,.3,1)}
+
+/* footer — live clock */
+.foot-clock{display:inline-flex;align-items:center;gap:6px;font-variant-numeric:tabular-nums;letter-spacing:.4px;opacity:.85}

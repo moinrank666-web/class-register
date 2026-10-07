@@ -46,7 +46,7 @@ def check(label, cond, detail=""):
 def main():
     print("static")
     html = call("GET", "/")
-    check("index.html served", isinstance(html, str) and "Class Register" in html)
+    check("index.html served", isinstance(html, str) and "Academic Ledger" in html)
 
     print("status / setup")
     st = call("GET", "/api/status")

@@ -1,4 +1,4 @@
-/* Class Register — front-end (vanilla JS, no build step) */
+/* Academic Ledger — front-end (vanilla JS, no build step) */
 (() => {
 'use strict';
 
@@ -34,6 +34,8 @@ const App = {
   token: sessionStorage.getItem('cr_token') || null,
   role:  sessionStorage.getItem('cr_role')  || null,
   view: 'students',
+  animateStats: false,
+  clock: null,
   filters: {
     students:   { q: '', grade: '', sort: 'grade', sortDir: 1 },
     attendance: { date: todayISO(), grade: '', month: thisMonth() },
@@ -134,7 +136,7 @@ function authShell(inner) {
         <div class="auth-side">
           <div class="brand-mini" style="margin:0">
             <div class="m">📚</div>
-            <div><b style="color:#fff">Class Register</b><span style="color:rgba(255,255,255,.85)">${T('brand.sub')}</span></div>
+            <div><b style="color:#fff">Academic Ledger</b><span style="color:rgba(255,255,255,.85)">${T('brand.sub')}</span></div>
           </div>
           <h1>${T('hero.h1')}</h1>
           <p>${T('hero.p')}</p>
@@ -261,7 +263,7 @@ function renderShell() {
         <div class="brand">
           <div class="brand-mark">📚</div>
           <div>
-            <div class="brand-name">Class Register</div>
+            <div class="brand-name">Academic Ledger</div>
             <div class="brand-sub">${T('brand.sub')}</div>
           </div>
         </div>
@@ -283,7 +285,8 @@ function renderShell() {
     </div>
     <main class="page" id="view"><div class="boot"><div class="boot-logo">⏳</div></div></main>
     <footer class="app-foot no-print">
-      <span class="foot-brand">📚 Class Register <em>v2026.10</em></span>
+      <span class="foot-brand">📚 Academic Ledger <em>v2026.10</em></span>
+      <span class="foot-clock" id="foot-clock">🕐 --:--:--</span>
       <span class="foot-status"><i></i>${T('foot.ok')}</span>
     </footer>`;
 
@@ -296,6 +299,7 @@ function renderShell() {
   $('#nav').addEventListener('click', e => {
     const b = e.target.closest('button[data-view]'); if (b) navigate(b.dataset.view);
   });
+  startClock();
   // never resume into the admin-only Activity tab as another role
   const start = (App.view === 'activity' && App.role !== 'admin') ? 'students' : (App.view || 'students');
   navigate(start);
@@ -303,6 +307,7 @@ function renderShell() {
 
 function navigate(view) {
   App.view = view;
+  App.animateStats = true;
   $$('#nav button').forEach(b => b.classList.toggle('active', b.dataset.view === view));
   const v = $('#view');
   v.innerHTML = `
@@ -318,6 +323,46 @@ function navigate(view) {
 const stat = (cls, label, num, note, icon = '') => `
   <div class="stat ${cls}"><div class="stat-top">${icon ? `<span class="stat-ic">${icon}</span>` : ''}<span class="stat-label">${label}</span></div>
   <div class="stat-num">${num}</div>${note ? `<div class="stat-note">${note}</div>` : ''}</div>`;
+
+/* count-up: animate stat numbers once per view entry (skipped under reduced-motion) */
+function animateStats() {
+  if (!App.animateStats) return;
+  App.animateStats = false;
+  try { if (matchMedia('(prefers-reduced-motion: reduce)').matches) return; } catch (_) {}
+  $$('#view .stat-num').forEach(el => {
+    const final = el.textContent.trim();
+    const m = /^(\d+(?:\.\d+)?)(.*)$/.exec(final);
+    if (!m) return;
+    const target = parseFloat(m[1]);
+    if (!isFinite(target) || target === 0) return;
+    const suffix = m[2];
+    const decs = (m[1].split('.')[1] || '').length;
+    const t0 = performance.now(), dur = 750;
+    const tick = now => {
+      const p = Math.min(1, (now - t0) / dur);
+      const eased = 1 - Math.pow(1 - p, 3);
+      el.textContent = (target * eased).toFixed(decs) + suffix;
+      if (p < 1) requestAnimationFrame(tick);
+      else el.textContent = final;
+    };
+    requestAnimationFrame(tick);
+  });
+}
+
+/* live clock in the app footer (re-render safe — one interval total) */
+function startClock() {
+  if (App.clock) clearInterval(App.clock);
+  const tick = () => {
+    const el = $('#foot-clock'); if (!el) return;
+    const d = new Date();
+    let s;
+    try { s = d.toLocaleTimeString(getLang() || 'en', { hour: '2-digit', minute: '2-digit', second: '2-digit' }); }
+    catch (_) { s = d.toLocaleTimeString(); }
+    el.textContent = `🕐 ${s}`;
+  };
+  tick();
+  App.clock = setInterval(tick, 1000);
+}
 
 function gradeOptions(grades, sel) {
   return `<option value="">${T('options.all')}</option>` +
@@ -414,6 +459,7 @@ async function renderStudents() {
       </div>
     </div>`;
 
+  animateStats();
   const search = debounce(v => { f.q = v; renderStudents(); }, 220);
   const qEl = $('#f-q');
   qEl.addEventListener('input', e => {
@@ -918,6 +964,7 @@ async function renderReport() {
       </div>
     </div>`;
 
+  animateStats();
   $('#r-month').addEventListener('change', e => { f.month = e.target.value || thisMonth(); renderReport(); });
   $('#r-grade').addEventListener('change', e => { f.grade = e.target.value; renderReport(); });
   $('#rep-body').addEventListener('click', e => {

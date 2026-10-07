@@ -1,4 +1,4 @@
-# Class Register — https://class-register-cudp.onrender.com/
+# Academic Ledger — https://class-register-cudp.onrender.com/
 User-agent: *
 Allow: /
 Disallow: /api/
