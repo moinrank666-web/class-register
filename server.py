@@ -107,6 +107,7 @@ MIME = {
     ".css": "text/css; charset=utf-8",
     ".js": "application/javascript; charset=utf-8",
     ".json": "application/json; charset=utf-8",
+    ".webmanifest": "application/manifest+json",
     ".svg": "image/svg+xml",
     ".png": "image/png",
     ".jpg": "image/jpeg",
@@ -824,6 +825,10 @@ class Handler(BaseHTTPRequestHandler):
             # image responses may be wrapped in a browser image-viewer
             # document, which styles itself with a small inline style
             csp = "default-src 'none'; style-src 'unsafe-inline'"
+        elif full.endswith("sw.js"):
+            # a service worker inherits the CSP delivered with its script, so
+            # it must be allowed to fetch same-origin shell + API requests
+            csp = "default-src 'self'"
         else:
             csp = "default-src 'none'"
         with open(full, "rb") as fh:

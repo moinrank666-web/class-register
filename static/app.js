@@ -46,14 +46,20 @@ const App = {
 
 /* ------------------------------ api ------------------------------ */
 async function api(path, { method = 'GET', body } = {}) {
-  const res = await fetch(path, {
-    method,
-    headers: {
-      'Content-Type': 'application/json',
-      ...(App.token ? { Authorization: 'Bearer ' + App.token } : {}),
-    },
-    body: body ? JSON.stringify(body) : undefined,
-  });
+  let res;
+  try {
+    res = await fetch(path, {
+      method,
+      headers: {
+        'Content-Type': 'application/json',
+        ...(App.token ? { Authorization: 'Bearer ' + App.token } : {}),
+      },
+      body: body ? JSON.stringify(body) : undefined,
+    });
+  } catch (_) {
+    // network unreachable and no cached copy — tell the user plainly
+    throw new Error(T('api.offline'));
+  }
   let data = {};
   try { data = await res.json(); } catch (_) { /* non-JSON */ }
   if (res.status === 401) { await signOut(); throw new Error(data.error ? trErr(data.error) : T('api.401')); }
@@ -95,7 +101,17 @@ async function signOut() {
   sessionStorage.removeItem('cr_token');
   sessionStorage.removeItem('cr_role');
   if (t) { try { await fetch('/api/logout', { method: 'POST', headers: { Authorization: 'Bearer ' + t } }); } catch (_) {} }
+  clearApiCache();
   renderLogin();
+}
+
+/* Drop cached API responses on sign-out so saved data never outlives a session. */
+async function clearApiCache() {
+  try {
+    if (!self.caches) return;
+    const keys = await caches.keys();
+    await Promise.all(keys.filter(k => k.startsWith('al-api-')).map(k => caches.delete(k)));
+  } catch (_) { /* Cache API unavailable */ }
 }
 
 /* Language toggle — re-renders whatever screen is showing, in the new language. */
@@ -1447,6 +1463,11 @@ async function boot() {
   } catch (ex) {
     renderLogin(ex.message && !/Session expired/.test(ex.message) ? ex.message : '');
   }
+}
+
+/* Install as a PWA — best-effort: insecure contexts simply have no SW. */
+if ('serviceWorker' in navigator) {
+  addEventListener('load', () => { navigator.serviceWorker.register('sw.js').catch(() => {}); });
 }
 boot();
 })();

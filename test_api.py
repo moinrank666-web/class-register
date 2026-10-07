@@ -44,6 +44,15 @@ def check(label, cond, detail=""):
         print(f"  FAIL {label} {detail}")
 
 
+def probe(path):
+    """Status + content-type + CSP without reading the (possibly binary) body."""
+    try:
+        with urllib.request.urlopen(BASE + path, timeout=10) as r:
+            return r.status, r.headers.get("Content-Type", ""), r.headers.get("Content-Security-Policy", "")
+    except urllib.error.HTTPError as e:
+        return e.code, e.headers.get("Content-Type", ""), e.headers.get("Content-Security-Policy", "")
+
+
 def main():
     print("static")
     html = call("GET", "/")
@@ -72,6 +81,46 @@ def main():
             locs = []
     check("sitemap.xml valid, points at canonical home",
           locs == ["https://class-register-cudp.onrender.com/"], str(locs))
+
+    print("pwa")
+    mf = call("GET", "/manifest.webmanifest")
+    check("manifest served as JSON", isinstance(mf, dict), str(type(mf)))
+    check("manifest names the app",
+          isinstance(mf, dict) and str(mf.get("name", "")).startswith("Academic Ledger"),
+          str(mf.get("name")) if isinstance(mf, dict) else "")
+    check("manifest install fields",
+          isinstance(mf, dict) and mf.get("display") == "standalone"
+          and mf.get("start_url") == "/" and mf.get("scope") == "/",
+          str({k: mf.get(k) for k in ("display", "start_url", "scope")}
+              if isinstance(mf, dict) else None))
+    icons = mf.get("icons", []) if isinstance(mf, dict) else []
+    sizes = {i.get("sizes") for i in icons}
+    purposes = {i.get("purpose", "any") for i in icons}
+    check("manifest lists 192+512 icons with a maskable",
+          {"192x192", "512x512"} <= sizes and "maskable" in purposes,
+          str(sizes) + " " + str(purposes))
+    st, ct, _ = probe("/manifest.webmanifest")
+    check("manifest MIME is manifest+json", st == 200 and "manifest+json" in ct,
+          f"{st} {ct}")
+    st, ct, csp = probe("/sw.js")
+    check("sw.js served as JavaScript", st == 200 and "javascript" in ct,
+          f"{st} {ct}")
+    check("sw.js worker CSP allows same-origin fetches",
+          "default-src 'self'" in csp, csp)
+    sw = call("GET", "/sw.js")
+    check("sw precaches shell + caches API data",
+          isinstance(sw, str) and "al-shell-" in sw and "al-api-" in sw, str(type(sw)))
+    check("sw intercepts fetch with offline fallback",
+          isinstance(sw, str) and "addEventListener('fetch'" in sw and "networkFirst" in sw)
+    check("index links the manifest", 'rel="manifest"' in html)
+    st, ct, _ = probe("/icon-512.png")
+    check("512 icon served as PNG", st == 200 and "image/png" in ct, f"{st} {ct}")
+    st, ct, _ = probe("/icon-192.png")
+    check("192 icon served as PNG", st == 200 and "image/png" in ct, f"{st} {ct}")
+    appjs = call("GET", "/app.js")
+    check("app registers the service worker",
+          isinstance(appjs, str) and "serviceWorker" in appjs and ".register(" in appjs)
+    check("sign-out clears cached data", isinstance(appjs, str) and "clearApiCache" in appjs)
 
     print("status / setup")
     st = call("GET", "/api/status")

@@ -117,6 +117,24 @@ Rules of the dual-mode design:
 Free Postgres instances sleep when idle: the first request after a quiet period
 wakes them (a few seconds), after which everything is fast.
 
+## Installable & offline (PWA)
+
+The app ships a web app manifest and a service worker, so browsers offer
+**Install as an app** (address-bar icon, or ⋮ → *Install page as app…*). Once
+installed it opens in its own window under the Academic Ledger icon — no
+browser chrome, just the register.
+
+Offline behaviour:
+
+- The shell (HTML, CSS, JS, fonts, icons, manifest) is precached on first
+  visit, so the app opens even with no connection.
+- Successful `GET /api/` responses are cached at runtime, so the last screens
+  you looked at still render offline. Live data always wins when the server
+  is reachable (network-first).
+- Cached data is **cleared on sign-out**, so saved data never outlives a
+  session. Marking attendance, saving scores and other changes need the
+  server — offline they fail with a clear "You are offline" message.
+
 ## Get found on Google
 
 Everything crawlers need ships with the app: an indexable title/description with
