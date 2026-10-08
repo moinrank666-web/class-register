@@ -1,5 +1,7 @@
 # Academic Ledger — Attendance & Monthly Performance
 
+**Live app: [class-register-cudp.onrender.com](https://class-register-cudp.onrender.com/)**
+
 A password-protected attendance register with monthly test performance, built as a
 local web app. Local mode needs **no packages** — only the Python standard library
 (`http.server` + `sqlite3`). Set `DATABASE_URL` and the same app runs on an external
@@ -140,7 +142,7 @@ Offline behaviour:
 Everything crawlers need ships with the app: an indexable title/description with
 **Academic Ledger** branding plus the generic `class register` search keywords,
 `robots.txt` + `sitemap.xml` at the canonical address
-`https://class-register-cudp.onrender.com/`, JSON-LD `WebApplication` and `WebSite`
+[https://class-register-cudp.onrender.com/](https://class-register-cudp.onrender.com/), JSON-LD `WebApplication` and `WebSite`
 schema, and crawlable copy on the loading screen plus a `<noscript>` fallback.
 Three steps on your side finish the job:
 
@@ -159,6 +161,13 @@ Three steps on your side finish the job:
 
 After that, `site:class-register-cudp.onrender.com` lists what Google indexed, and
 searching **Academic Ledger** (or pasting the address itself) finds the app.
+
+**"Page is not indexed → Discovered - currently not indexed"?** That is not an
+error: Google has fetched `robots.txt` and knows the URL, but a brand-new site with
+no backlinks sits in the crawl queue for days to weeks. Confirm the sitemap shows
+*Success* under *Sitemaps*, then URL Inspection → **Request indexing** on the home
+page (repeat after each deploy). Crawl signals are all green — indexing is purely a
+time-and-prominence game after this point.
 
 ## Tests
 
