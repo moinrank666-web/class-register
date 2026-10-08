@@ -817,6 +817,11 @@ class Handler(BaseHTTPRequestHandler):
             cache = "public, max-age=604800"
         elif ext in (".css", ".js"):
             cache = "public, max-age=300"
+        elif path in ("/robots.txt", "/sitemap.xml"):
+            # Crawler files: honour max-age so search engines can keep a cached
+            # copy and a single transient origin failure never looks like a
+            # robots.txt fetch error (Google caches robots.txt per max-age).
+            cache = "public, max-age=3600"
         else:
             cache = "no-store"
         if ext == ".html":
