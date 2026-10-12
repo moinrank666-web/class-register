@@ -20,24 +20,59 @@
   ];
   const KEYS = ['I', 'O', 'T', 'S', 'Z', 'J', 'L'];
   const HUE = { I: '#3DD9E0', O: '#FFC94A', T: '#B079FF', S: '#3DD68C', Z: '#FF5C7A', J: '#5B8DEF', L: '#FF9A5B' };
-  const HI_KEY = 'cr_tetris_hi';
+  /* Local top-five table: [ { n: 'ABC', s: 1234 }, … ] highest first. */
+  const SCORES_KEY = 'cr_tetris_scores';
+  const NAME_KEY = 'cr_tetris_name';
+  const LEGACY_BEST_KEY = 'cr_tetris_hi';   // single-score key used before the table
+  const MAX_SCORES = 5;
 
   let root = null, cv = null, ctx = null, nx = null, nctx = null, hx = null, hctx = null;
   let cell = 26, pad = 0;
   let board, cur, next, hold, canHold;
-  let score = 0, lines = 0, level = 1, best = 0;
+  let score = 0, lines = 0, level = 1;
   let over = false, paused = false, running = false;
   let raf = 0, last = 0, acc = 0;
   let bag = [];
+  let scores = [];
 
   /* ------------------------------- helpers ------------------------------ */
   const rot = m => m[0].map((_, c) => m.map(r => r[c]).reverse());
 
-  function readBest() {
-    try { return Number(localStorage.getItem(HI_KEY)) || 0; } catch (_) { return 0; }
+  /* Only letters and digits ever reach storage or the screen, so a stored name
+     can never become markup. */
+  const cleanName = v => String(v || '').replace(/[^A-Za-z0-9]/g, '').toUpperCase().slice(0, 3);
+  const rank = rows => rows.sort((a, b) => b.s - a.s).slice(0, MAX_SCORES);
+  function loadScores() {
+    let rows = [];
+    try {
+      const raw = JSON.parse(localStorage.getItem(SCORES_KEY) || '[]');
+      if (Array.isArray(raw)) {
+        rows = raw
+          .filter(r => r && typeof r.s === 'number' && isFinite(r.s) && r.s > 0)
+          .map(r => ({ n: cleanName(r.n) || '---', s: Math.floor(r.s) }));
+      }
+    } catch (_) { rows = []; }
+    if (!rows.length) {
+      // One-time seed from the single-score key this game kept before the table,
+      // so a best score earned earlier is never silently dropped.
+      try {
+        const legacy = Math.floor(Number(localStorage.getItem(LEGACY_BEST_KEY)) || 0);
+        if (legacy > 0) rows = [{ n: '---', s: legacy }];
+      } catch (_) { /* private mode */ }
+    }
+    return rank(rows);
   }
-  function writeBest(v) {
-    try { localStorage.setItem(HI_KEY, String(v)); } catch (_) { /* private mode */ }
+  const bestScore = () => (scores.length ? scores[0].s : 0);
+  const qualifies = sc => sc > 0 && (scores.length < MAX_SCORES || sc > scores[scores.length - 1].s);
+  function addScore(name) {
+    const row = { n: cleanName(name) || '---', s: score };
+    scores = rank(scores.concat([row]));
+    try { localStorage.setItem(SCORES_KEY, JSON.stringify(scores)); } catch (_) { /* private mode */ }
+    try { localStorage.setItem(NAME_KEY, row.n); } catch (_) { /* private mode */ }
+    return scores.indexOf(row);
+  }
+  function lastName() {
+    try { return cleanName(localStorage.getItem(NAME_KEY) || ''); } catch (_) { return ''; }
   }
   function shuffle() {
     bag = KEYS.slice();
@@ -133,23 +168,47 @@
   function gameOver() {
     over = true; running = false;
     cancelAnimationFrame(raf);
-    if (score > best) { best = score; writeBest(best); }
     paint();
     const plate = root && root.querySelector('#tt-plate');
-    if (plate) {
-      plate.hidden = false;
-      const fin = plate.querySelector('#tt-final');
-      const pb = plate.querySelector('#tt-best-2');
-      if (fin) fin.textContent = score.toLocaleString();
-      if (pb) pb.textContent = best.toLocaleString();
-    }
+    if (!plate) return;
+    plate.hidden = false;
+    const fin = plate.querySelector('#tt-final');
+    if (fin) fin.textContent = score.toLocaleString();
+    const fresh = qualifies(score);
+    const title = plate.querySelector('#tt-plate-title');
+    if (title) title.textContent = fresh ? 'NEW HIGH SCORE' : 'GAME OVER';
+    const entry = plate.querySelector('#tt-entry');
+    if (entry) entry.hidden = !fresh;
+    const again = plate.querySelector('#tt-again');
+    if (again) again.hidden = !!fresh;   // you get the board back once saved
+    const nameEl = plate.querySelector('#tt-name');
+    if (fresh && nameEl) { nameEl.value = lastName(); nameEl.focus(); }
+    paintScores(-1);
+  }
+  function saveEntry() {
+    const plate = root && root.querySelector('#tt-plate');
+    if (!plate) return;
+    const nameEl = plate.querySelector('#tt-name');
+    const at = addScore(nameEl ? nameEl.value : '');
+    const entry = plate.querySelector('#tt-entry');
+    if (entry) { entry.hidden = true; }
+    const again = plate.querySelector('#tt-again');
+    if (again) { again.hidden = false; again.focus(); }
+    paintScores(at);
+    paint();
   }
   function reset() {
     board = Array.from({ length: ROWS }, () => new Array(COLS).fill(null));
     bag = []; next = null; hold = null; canHold = true;
     score = 0; lines = 0; level = 1; over = false; paused = false; acc = 0;
     const plate = root && root.querySelector('#tt-plate');
-    if (plate) plate.hidden = true;
+    if (plate) {
+      plate.hidden = true;
+      const entry = plate.querySelector('#tt-entry');
+      if (entry) entry.hidden = true;
+      const again = plate.querySelector('#tt-again');
+      if (again) again.hidden = false;
+    }
     if (!spawn()) return;
     start();
     paint();
@@ -212,7 +271,32 @@
     if (s) s.textContent = score.toLocaleString();
     ['level', 'lines', 'best'].forEach(k => {
       const el = root && root.querySelector('#tt-' + k);
-      if (el) el.textContent = String(k === 'best' ? Math.max(best, score) : k === 'level' ? level : lines);
+      if (el) el.textContent = String(k === 'best' ? Math.max(bestScore(), score) : k === 'level' ? level : lines);
+    });
+  }
+  /* Built as DOM nodes, never as markup: a name comes from the player. */
+  function paintScores(highlight) {
+    const box = root && root.querySelector('#tt-scores');
+    if (!box) return;
+    box.textContent = '';
+    if (!scores.length) {
+      const none = document.createElement('div');
+      none.className = 'tt-empty';
+      none.textContent = 'no scores yet';
+      box.appendChild(none);
+      return;
+    }
+    scores.forEach((r, i) => {
+      const row = document.createElement('div');
+      row.className = 'tt-hs-row' + (i === highlight ? ' on' : '');
+      const rk = document.createElement('span');
+      rk.className = 'tt-hs-rank'; rk.textContent = String(i + 1);
+      const nm = document.createElement('span');
+      nm.className = 'tt-hs-name'; nm.textContent = cleanName(r.n) || '---';
+      const pts = document.createElement('span');
+      pts.className = 'tt-hs-pts'; pts.textContent = r.s.toLocaleString();
+      row.appendChild(rk); row.appendChild(nm); row.appendChild(pts);
+      box.appendChild(row);
     });
   }
   function mini(g, piece, w, h, canvas) {
@@ -278,9 +362,14 @@
             '<div class="tt-board-wrap">' +
               '<canvas id="tt-board" data-w="10" data-h="20" width="260" height="520"></canvas>' +
               '<div class="tt-plate" id="tt-plate" hidden>' +
-                '<b>GAME OVER</b>' +
-                '<span>score <em id="tt-final">0</em></span>' +
-                '<span>best <em id="tt-best-2">0</em></span>' +
+                '<b id="tt-plate-title">GAME OVER</b>' +
+                '<span class="tt-you">score <em id="tt-final">0</em></span>' +
+                '<div class="tt-entry" id="tt-entry" hidden>' +
+                  '<label for="tt-name">initials</label>' +
+                  '<input id="tt-name" maxlength="3" size="3" autocomplete="off" spellcheck="false" placeholder="AAA" aria-label="Your initials">' +
+                  '<button type="button" id="tt-save">Save</button>' +
+                '</div>' +
+                '<div class="tt-hs" id="tt-scores"></div>' +
                 '<button type="button" class="tt-again" id="tt-again">Play again ⏎</button>' +
               '</div>' +
             '</div>' +
@@ -300,6 +389,10 @@
 
     root.querySelector('#tt-x').onclick = close;
     root.querySelector('#tt-again').onclick = reset;
+    root.querySelector('#tt-save').onclick = saveEntry;
+    const nameEl = root.querySelector('#tt-name');
+    // Keep the field itself to three letters or digits, whatever gets pasted in.
+    nameEl.addEventListener('input', () => { nameEl.value = cleanName(nameEl.value); });
     root.querySelector('#tt-back').addEventListener('click', e => { if (e.target.id === 'tt-back') close(); });
     const tap = e => {
       const b = e.target.closest('.tt-key'); if (!b) return;
@@ -346,9 +439,8 @@
   function open() {
     if (root) { root.querySelector('.tt-back').focus?.(); return; }
     build();
-    best = readBest();
-    const b2 = root.querySelector('#tt-best-2');
-    if (b2) b2.textContent = best.toLocaleString();
+    scores = loadScores();
+    paintScores(-1);
     fit();
     reset();
   }
@@ -365,6 +457,24 @@
   document.addEventListener('keydown', function (e) {
     if (root) {
       const k = e.key;
+      const field = e.target;
+      if (field && field.id === 'tt-name') {
+        // The initials field owns the keyboard while it is up: let its letters
+        // through untouched (no preventDefault) and keep the game — and app.js —
+        // out of the way.
+        e.stopImmediatePropagation();
+        if (k === 'Enter') { e.preventDefault(); saveEntry(); }
+        else if (k === 'Escape') { e.preventDefault(); close(); }
+        return;
+      }
+      const entry = root.querySelector('#tt-entry');
+      if (entry && !entry.hidden) {
+        // Waiting for initials: Enter saves, and nothing drives the board.
+        if (k === 'Escape') { e.preventDefault(); e.stopImmediatePropagation(); close(); return; }
+        if (k === 'Enter') { e.preventDefault(); e.stopImmediatePropagation(); saveEntry(); return; }
+        if (k !== 'Tab') { e.preventDefault(); e.stopImmediatePropagation(); }
+        return;
+      }
       if (k === 'Escape') { e.preventDefault(); e.stopImmediatePropagation(); close(); return; }
       if (k === 'p' || k === 'P') { e.preventDefault(); e.stopImmediatePropagation(); togglePause(); return; }
       if (k === 'c' || k === 'C') { e.preventDefault(); e.stopImmediatePropagation(); swap(); return; }

@@ -159,6 +159,13 @@ def main():
     check("index loads the hidden game", 'src="tetris.js' in html)
     check("service worker precaches the hidden game",
           isinstance(sw, str) and "tetris.js" in sw)
+    check("hidden game keeps a local top five",
+          isinstance(tet, str) and "cr_tetris_scores" in tet and "MAX_SCORES = 5" in tet)
+    check("initials are stripped to letters and digits",
+          isinstance(tet, str) and "replace(/[^A-Za-z0-9]/g, '')" in tet)
+    check("high-score names are rendered as text, never markup",
+          isinstance(tet, str) and "createElement('span')" in tet
+          and "tt-hs-name'; nm.textContent" in tet)
     ui = call("GET", "/app.js")
     check("hidden game is never advertised in the UI chrome",
           isinstance(ui, str) and "tetris" not in ui.lower()
