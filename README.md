@@ -219,6 +219,57 @@ You can check the served file yourself at any time:
 curl -sS https://class-register-cudp.onrender.com/robots.txt
 ```
 
+## Moving to your own domain (and making `www` work)
+
+`www.class-register-cudp.onrender.com` can never work, and no change in this repo
+fixes it. The certificate Render's edge presents is `CN=onrender.com` with
+`SAN onrender.com, *.onrender.com` — a **single-label** wildcard. It covers the app's
+own two-part name but not a third label, so the `www` host dies in the TLS handshake
+with a fatal alert and every client, Google included, sees nothing. Search Console
+reports that as *"Robots.txt unreachable"*: a connection failure, not a disallowed
+file. A custom domain is the only real fix, and Render's free plan supports it.
+
+1. **Buy a domain**, then add it in Render: *service → Settings → Custom Domains →
+   + Add Custom Domain*, entering the **apex** (`example.com`). Render automatically
+   adds `www.example.com` and redirects it to the apex, which is exactly the shape
+   you want. Certificates are issued and renewed for you, and plain HTTP is
+   redirected to HTTPS.
+2. **Point DNS at Render** at your registrar — and delete any AAAA records, because
+   Render is IPv4-only and stray IPv6 records stall verification:
+
+   | Hostname | Record | Value |
+   |---|---|---|
+   | `example.com` (`@`) | ANAME / ALIAS, or CNAME flattening | `class-register-cudp.onrender.com` |
+   | `example.com` (`@`), if your provider offers none of those | `A` | `216.24.57.1` |
+   | `www` | `CNAME` | `class-register-cudp.onrender.com` |
+
+   On Cloudflare use a `CNAME` for both `@` and `www`, kept **DNS only** until Render
+   reports the certificate as issued.
+3. **Click *Verify*** on each domain in Render. A brief `502` while routing updates is
+   normal.
+4. **Move the canonical address in one pass.** It is written out verbatim in six
+   files, so search-and-replace rather than hunting by hand:
+
+   ```bash
+   grep -rn "class-register-cudp.onrender.com" . | grep -v __pycache__
+   ```
+
+   | File | What has to change |
+   |---|---|
+   | `static/robots.txt` | the `Sitemap:` line and the comment above it |
+   | `static/sitemap.xml` | the `<loc>` |
+   | `static/index.html` | `rel="canonical"`, `og:url`, `og:image`, `twitter:image`, both JSON-LD blocks, and the `<noscript>` link |
+   | `.github/workflows/keep-awake.yml` | the `SITE` variable the cron pings |
+   | `test_api.py` | the two assertions that pin `robots.txt` and `sitemap.xml` to the address |
+   | `README.md` | the links in this file |
+
+5. **Leave the `onrender.com` address enabled** while DNS settles — it keeps serving
+   alongside a custom domain, so nothing breaks mid-move. Once the canonical points
+   at the new domain, Google consolidates the duplicates on its own.
+6. **In Search Console, add a new URL-prefix property** for the new domain, verify it
+   with its own HTML tag, submit the sitemap there, and request indexing. Keep the old
+   property for a while so you can watch the move.
+
 ## Uptime monitoring
 
 `/healthz` is a tiny public endpoint that answers `ok` from the process alone — no
