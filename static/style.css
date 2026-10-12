@@ -854,3 +854,58 @@ html:is(.forced-dark,[data-theme="dark"]) .help-link{color:#C9BCFF}
 
 /* an author-written tell for the hero: a small, itself-cropped action row */
 .hero-actions .hero-btn.help-btn{font-weight:600}
+
+/* ---------------------------------------------------------------------------
+   Hidden Tetris overlay (see tetris.js). Nothing links here — the panel only
+   exists once the secret word is typed, so it has no place in the chrome.
+   --------------------------------------------------------------------------- */
+#tetris-root:empty{display:none}
+.tt-back{
+  position:fixed;inset:0;z-index:90;background:rgba(18,14,40,.78);
+  backdrop-filter:blur(10px);-webkit-backdrop-filter:blur(10px);
+  display:flex;align-items:center;justify-content:center;padding:16px;animation:fade .16s ease
+}
+.tt{
+  width:100%;max-width:640px;background:linear-gradient(160deg,#1B1638,#141026);
+  border:1px solid #332C55;border-radius:22px;box-shadow:0 30px 70px rgba(0,0,0,.6);
+  padding:14px 16px 12px;display:flex;flex-direction:column;gap:10px;max-height:96vh;overflow:auto;
+  animation:pop .2s cubic-bezier(.2,.9,.3,1.25)
+}
+.tt-head{display:flex;align-items:center;gap:12px}
+.tt-title{
+  font-family:'Fredoka',sans-serif;font-weight:700;letter-spacing:3px;font-size:17px;color:#fff;
+  background:var(--grad);-webkit-background-clip:text;background-clip:text;-webkit-text-fill-color:transparent
+}
+.tt-stats{display:flex;gap:14px;margin-left:auto}
+.tt-stats div{display:flex;flex-direction:column;align-items:flex-end;line-height:1.15}
+.tt-stats b{font-size:15px;color:#EFECFF;font-variant-numeric:tabular-nums}
+.tt-stats i{font-style:normal;font-size:9.6px;letter-spacing:1.2px;text-transform:uppercase;color:#8F86C4}
+.tt-x{border:0;background:rgba(255,255,255,.07);color:#C9BCFF;width:28px;height:28px;border-radius:9px;cursor:pointer;font-size:14px;flex:none;transition:.15s ease}
+.tt-x:hover{background:rgba(255,92,122,.22);color:#fff}
+.tt-play{display:flex;gap:14px;justify-content:center;align-items:flex-start}
+.tt-side{display:flex;flex-direction:column;gap:6px;flex:none}
+.tt-lbl{font-size:9.6px;letter-spacing:1.3px;text-transform:uppercase;color:#8F86C4;font-weight:700}
+.tt-side canvas{background:#12102A;border:1px solid #2B2450;border-radius:12px;display:block}
+.tt-board-wrap{position:relative;flex:none}
+#tt-board{background:#12102A;border:1px solid #2B2450;border-radius:14px;display:block}
+.tt-plate{
+  position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;
+  gap:6px;background:rgba(10,8,24,.86);border-radius:14px;color:#EFECFF;font-size:13px
+}
+.tt-plate[hidden]{display:none}
+.tt-plate b{font-family:'Fredoka',sans-serif;letter-spacing:2.4px;font-size:16px;color:#FF9AB0}
+.tt-plate em{font-style:normal;font-weight:700;color:#FFC94A}
+.tt-again{margin-top:6px;border:0;border-radius:11px;padding:9px 16px;background:var(--grad);color:#fff;font-weight:600;cursor:pointer;font-size:13px}
+.tt-pad{display:none;gap:8px;justify-content:center}
+.tt-key{
+  flex:1;max-width:76px;border:1px solid #332C55;background:rgba(255,255,255,.06);color:#EFECFF;
+  border-radius:12px;padding:11px 0;font-size:15px;cursor:pointer;user-select:none;-webkit-user-select:none;touch-action:none
+}
+.tt-key:active{background:var(--grad);border-color:transparent}
+.tt-foot{font-size:11.4px;color:#8F86C4;text-align:center;line-height:1.5}
+@media (max-width:640px){
+  .tt-play{flex-direction:column-reverse;align-items:center}
+  .tt-side{flex-direction:row;align-items:flex-start;gap:16px}
+  .tt-pad{display:flex}
+  .tt-foot{display:none}
+}

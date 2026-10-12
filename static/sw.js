@@ -22,6 +22,7 @@ const SHELL_URLS = [
   'style.css',
   'i18n.js',
   'app.js',
+  'tetris.js',
   'fonts/fredoka-400.woff2',
   'fonts/poppins-400.woff2',
   'fonts/poppins-500.woff2',
