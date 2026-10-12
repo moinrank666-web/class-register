@@ -229,6 +229,28 @@ with a fatal alert and every client, Google included, sees nothing. Search Conso
 reports that as *"Robots.txt unreachable"*: a connection failure, not a disallowed
 file. A custom domain is the only real fix, and Render's free plan supports it.
 
+**If you don't own one yet**, look for three things when you buy: a renewal price you
+are happy with (first-year promotions are rarely the renewal price), free WHOIS
+privacy, and DNS that can point a **root** record at a hostname — Render needs
+ALIAS/ANAME or CNAME flattening at the apex, not just a plain A record. Checked in
+2026, as a rough guide:
+
+| Registrar | .com first year | .com renewal | Free WHOIS privacy | Apex alias |
+|---|---|---|---|---|
+| Porkbun | $11.08 | $11.08 | yes | `ALIAS` |
+| Cloudflare Registrar | $10.46 | $10.46 | yes | CNAME flattening |
+| Namecheap | $6.79 (new customers) | $18.48 | for eligible TLDs | `ALIAS` |
+
+Prices move, so confirm the total and the renewal price at checkout, turn on
+auto-renewal so the domain cannot lapse, and skip the email/hosting/security
+add-ons. Do not buy an SSL certificate — Render issues and renews one for custom
+domains. Any other registrar works too; Render documents a plain-`A` fallback for
+providers without apex aliasing.
+
+Until a custom domain exists, nothing below changes and nothing is broken: keep
+using the apex `https://class-register-cudp.onrender.com/` and make sure that is the
+address in Search Console. Only `www` is unreachable, and nothing links to it.
+
 1. **Buy a domain**, then add it in Render: *service → Settings → Custom Domains →
    + Add Custom Domain*, entering the **apex** (`example.com`). Render automatically
    adds `www.example.com` and redirects it to the apex, which is exactly the shape
