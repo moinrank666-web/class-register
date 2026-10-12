@@ -883,6 +883,13 @@ class Handler(BaseHTTPRequestHandler):
 
     # ---------- static ----------
     def serve_static(self, path):
+        if path == "/healthz":
+            # Uptime-monitor target. Answers from the process alone — no
+            # database, no session lookup, no file read — so a monitor can tell
+            # "the process is up" apart from "the database is unhappy".
+            self._send(b"ok\n", "text/plain; charset=utf-8", cache="no-store",
+                       csp="default-src 'none'", noindex=True)
+            return
         if path in ("/", ""):
             path = "/index.html"
         full = os.path.realpath(os.path.join(STATIC_DIR, path.lstrip("/")))

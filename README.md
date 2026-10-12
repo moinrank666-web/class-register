@@ -219,6 +219,42 @@ You can check the served file yourself at any time:
 curl -sS https://class-register-cudp.onrender.com/robots.txt
 ```
 
+## Uptime monitoring
+
+`/healthz` is a tiny public endpoint that answers `ok` from the process alone — no
+database, no session lookup, no file read — so a monitor can tell "the app is up"
+apart from "the database is unhappy". It is `no-store` and `noindex`, and it reports
+the server identity `AttendanceRegister/1.0`, which is how a script proves the answer
+came from this process rather than from a synthetic edge response for a sleeping one.
+
+Two things watch the site:
+
+- **`.github/workflows/keep-awake.yml`** runs every ten minutes and *is* the alert
+  channel: GitHub emails you whenever a scheduled run fails. It fails when any of
+  `/healthz`, `/`, `/robots.txt` or `/sitemap.xml` is not `200` after three tries,
+  when the *first* attempt takes 8 s or more (a warm instance answers in well under a
+  second, so that means it had gone to sleep and was booting again), when the reply
+  carries no `AttendanceRegister/1.0` identity, or when `robots.txt` ever disallows
+  the site.
+- **UptimeRobot** (free) is the outside-the-repo monitor, and the only one that can
+  reach you when GitHub itself is the thing that broke:
+
+  1. Create a free account at [uptimerobot.com](https://uptimerobot.com).
+  2. *Add New Monitor* → type **HTTP(s)** → URL
+     `https://class-register-cudp.onrender.com/healthz` → interval **5 minutes** →
+     alert contact = your email address.
+  3. In that monitor's alert settings, keep **response-time** alerts enabled with the
+     threshold at **8 seconds**, so a cold start warns you as loudly as an outage.
+
+A five-minute check also keeps a free Render instance from idling into sleep in the
+first place, which is the root cause of the stale-`robots.txt` incident above.
+
+Check it by hand at any time:
+
+```bash
+curl -i https://class-register-cudp.onrender.com/healthz     # expect 200 ok
+```
+
 ## Tests
 
 ```bash

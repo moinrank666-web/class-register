@@ -54,6 +54,16 @@ def probe(path):
         return e.code, e.headers.get("Content-Type", ""), e.headers.get("Content-Security-Policy", "")
 
 
+def headers_of(path, method="GET"):
+    """Response headers only, case-insensitive lookup (HTTPMessage.get)."""
+    req = urllib.request.Request(BASE + path, method=method)
+    try:
+        with urllib.request.urlopen(req, timeout=10) as r:
+            return r.status, r.headers
+    except urllib.error.HTTPError as e:
+        return e.code, e.headers
+
+
 def main():
     print("static")
     html = call("GET", "/")
@@ -80,6 +90,22 @@ def main():
     st, ct, _ = probe("/robots.txt")
     check("robots.txt served as plain text", st == 200 and "text/plain" in ct,
           f"{st} {ct}")
+
+    print("monitoring")
+    st, ct, _ = probe("/healthz")
+    check("/healthz answers 200 as text/plain", st == 200 and "text/plain" in ct,
+          f"{st} {ct}")
+    check("/healthz needs no sign-in and returns a bare ok",
+          call("GET", "/healthz").strip() == "ok")
+    st, hz = headers_of("/healthz")
+    check("/healthz tells the monitor which app answered",
+          "AttendanceRegister" in (hz.get("Server") or ""), str(hz.get("Server")))
+    check("/healthz is never cached or indexed",
+          "no-store" in (hz.get("Cache-Control") or "")
+          and "noindex" in (hz.get("X-Robots-Tag") or ""),
+          f"{hz.get('Cache-Control')} / {hz.get('X-Robots-Tag')}")
+    st, _ = headers_of("/healthz", method="HEAD")
+    check("/healthz answers HEAD (Render's own port probe)", st == 200, str(st))
     sm = call("GET", "/sitemap.xml")
     locs = []
     if isinstance(sm, str):
@@ -125,6 +151,19 @@ def main():
           isinstance(sw, str) and "al-shell-" in sw and "al-api-" in sw, str(type(sw)))
     check("sw intercepts fetch with offline fallback",
           isinstance(sw, str) and "addEventListener('fetch'" in sw and "networkFirst" in sw)
+    st, ct, _ = probe("/tetris.js")
+    check("tetris.js served as JavaScript", st == 200 and "javascript" in ct, f"{st} {ct}")
+    tet = call("GET", "/tetris.js")
+    check("tetris game is self-contained (no API calls)",
+          isinstance(tet, str) and "/api/" not in tet and "fetch(" not in tet)
+    check("index loads the hidden game", 'src="tetris.js' in html)
+    check("service worker precaches the hidden game",
+          isinstance(sw, str) and "tetris.js" in sw)
+    ui = call("GET", "/app.js")
+    check("hidden game is never advertised in the UI chrome",
+          isinstance(ui, str) and "tetris" not in ui.lower()
+          and "tetris" not in call("GET", "/i18n.js").lower(),
+          "app.js/i18n.js must not mention it")
     check("index links the manifest", 'rel="manifest"' in html)
     st, ct, _ = probe("/icon-512.png")
     check("512 icon served as PNG", st == 200 and "image/png" in ct, f"{st} {ct}")

@@ -1,5 +1,11 @@
 name: Keep Render awake
 
+# Pings the free Render instance so it never idles into sleep, and turns the
+# two failure modes we have actually been bitten by into a failed run — GitHub
+# emails the repo owner whenever a scheduled run fails, so the workflow *is*
+# the alert channel. (A third-party monitor such as UptimeRobot covers the same
+# ground from outside; see "Uptime monitoring" in README.md.)
+
 on:
   schedule:
     - cron: '*/10 * * * *'
@@ -8,30 +14,60 @@ on:
 jobs:
   ping:
     runs-on: ubuntu-latest
+    env:
+      SITE: https://class-register-cudp.onrender.com
+      # A warm instance answers in well under a second. A first attempt that
+      # takes this long means the instance had stopped and had to boot again.
+      COLD_START_SECONDS: 8
     steps:
-      - name: Fetch pages the way Googlebot does
+      - name: Liveness, latency and cold-start check
         run: |
+          set -u
           fail=0
-          for path in / /robots.txt /sitemap.xml; do
+          for path in /healthz / /robots.txt /sitemap.xml; do
             code=000
+            secs=0
+            first_secs=0
             for try in 1 2 3; do
-              code=$(curl -sS -o /dev/null -w '%{http_code}' --max-time 60 \
-                      "https://class-register-cudp.onrender.com${path}" 2>/dev/null) || code=000
+              out=$(curl -sS -o /dev/null -w '%{http_code} %{time_total}' \
+                      --max-time 60 "$SITE$path" 2>/dev/null) || out='000 0'
+              code=${out%% *}
+              secs=${out##* }
+              if [ "$try" = "1" ]; then first_secs=$secs; fi
               if [ "$code" = "200" ]; then break; fi
               sleep 20
             done
-            echo "$path -> $code"
-            if [ "$code" != "200" ]; then fail=1; fi
+            echo "$path -> $code in ${secs}s (first attempt ${first_secs}s)"
+            if [ "$code" != "200" ]; then
+              echo "::error::$SITE$path answered $code after three attempts — the site is down"
+              fail=1
+            elif awk "BEGIN{exit !($first_secs >= $COLD_START_SECONDS)}"; then
+              echo "::error::$SITE$path took ${first_secs}s on the first attempt: the instance had gone to sleep. A sleeping origin is what let Google cache a bogus robots.txt."
+              fail=1
+            fi
           done
           exit $fail
+
+      - name: The answer must come from our app, not a synthetic edge response
+        # When the origin is asleep Render's edge has answered for it with a
+        # page-wide "Disallow: /" robots.txt and none of our headers. Requiring
+        # our own Server string catches that at the source.
+        run: |
+          headers=$(curl -sS -D - -o /tmp/health-body --max-time 60 "$SITE/healthz" || true)
+          body=$(cat /tmp/health-body 2>/dev/null || true)
+          printf '%s\n' "$headers"
+          echo "body: $body"
+          printf '%s' "$body" | grep -qx 'ok' \
+            || { echo "::error::/healthz did not return exactly 'ok'"; exit 1; }
+          printf '%s' "$headers" | grep -q 'AttendanceRegister/1.0' \
+            || { echo "::error::/healthz was not answered by our app (no AttendanceRegister/1.0 identity in the response)"; exit 1; }
 
       - name: Confirm robots.txt still allows crawling
         # A sleeping origin can be answered by a synthetic robots.txt that
         # disallows the whole site; that is what Search Console reports as
         # "blocked by robots.txt". Fail loudly if we ever see one.
         run: |
-          body=$(curl -sS --max-time 60 \
-                  https://class-register-cudp.onrender.com/robots.txt || true)
+          body=$(curl -sS --max-time 60 "$SITE/robots.txt" || true)
           printf '%s\n' "$body"
           if printf '%s' "$body" | grep -Eiq '^[[:space:]]*disallow:[[:space:]]*/[[:space:]]*$'; then
             echo "::error::robots.txt disallows the whole site"
