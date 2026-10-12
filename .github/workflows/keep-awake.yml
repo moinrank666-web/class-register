@@ -52,6 +52,7 @@ jobs:
         # When the origin is asleep Render's edge has answered for it with a
         # page-wide "Disallow: /" robots.txt and none of our headers. Requiring
         # our own Server string catches that at the source.
+        if: always()          # a failed step must never hide the crawler checks
         run: |
           headers=$(curl -sS -D - -o /tmp/health-body --max-time 60 "$SITE/healthz" || true)
           body=$(cat /tmp/health-body 2>/dev/null || true)
@@ -65,7 +66,10 @@ jobs:
       - name: Confirm robots.txt still allows crawling
         # A sleeping origin can be answered by a synthetic robots.txt that
         # disallows the whole site; that is what Search Console reports as
-        # "blocked by robots.txt". Fail loudly if we ever see one.
+        # "blocked by robots.txt". Fail loudly if we ever see one. Runs even
+        # when the liveness step above failed — this is the check that matters
+        # most during exactly the incident it is meant to catch.
+        if: always()
         run: |
           body=$(curl -sS --max-time 60 "$SITE/robots.txt" || true)
           printf '%s\n' "$body"
