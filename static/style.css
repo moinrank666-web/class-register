@@ -38,7 +38,7 @@
 }
 
 :root{
-  color-scheme:only light;
+  color-scheme:light dark;
   --violet:#7C5CFC;
   --violet-d:#6544E8;
   --violet-l:#A78BFA;
@@ -111,61 +111,62 @@ a{color:var(--violet)}
 .boot-logo{font-size:52px;animation:bob 1.4s ease-in-out infinite}
 @keyframes bob{0%,100%{transform:translateY(0)}50%{transform:translateY(-10px)}}
 
-/* ===== Curated palette used only when the browser force-darkens pages ===== */
-html.forced-dark{
-  color-scheme:light;
+/* ===== Dark palette — applied for the explicit dark theme, or when the
+   browser force-darkens a light page (legacy .forced-dark hook) ===== */
+html:is(.forced-dark,[data-theme="dark"]){
+  color-scheme:dark;
   --bg:#141026; --card:#1E1936; --ink:#EFECFF; --ink-2:#AFA7D6; --line:#332C55;
   --glass:#1E1936; --glass-b:#332C55; --ring:rgba(139,118,255,.32);
   --violet-d:#C9BCFF; --shadow:0 16px 36px rgba(0,0,0,.55); --shadow-sm:0 8px 20px rgba(0,0,0,.45);
   --shadow-lg:0 30px 70px rgba(0,0,0,.62);
 }
-html.forced-dark body{background:#141026;color:#EFECFF}
-html.forced-dark .blob{opacity:.2;filter:blur(92px)}
-html.forced-dark .card,html.forced-dark .stat,html.forced-dark .auth-card,
-html.forced-dark .modal,html.forced-dark .nav{backdrop-filter:none;-webkit-backdrop-filter:none}
-html.forced-dark .card,html.forced-dark .stat,html.forced-dark .nav,html.forced-dark .modal,
-html.forced-dark .modal-head,html.forced-dark .auth-card,html.forced-dark .test-card,
-html.forced-dark .kv > div,html.forced-dark .brand-mark,html.forced-dark .hero-btn,
-html.forced-dark .role-chip{background:#1E1936;border-color:#332C55;color:#EFECFF}
-html.forced-dark .nav button{color:#AFA7D6}
-html.forced-dark .nav button:hover{background:#2A2447;color:#EFECFF}
-html.forced-dark .nav button.active{background:linear-gradient(135deg,#6A4BFF,#A17BFF 42%,#FF6B9D);color:#fff}
-html.forced-dark thead th{background:#251F42;color:#C4BBEC;border-bottom-color:#332C55}
-html.forced-dark tbody td{border-bottom-color:#2A2447}
-html.forced-dark tbody tr:hover{background:#241E3F}
-html.forced-dark .input,html.forced-dark .field input,html.forced-dark .field select,
-html.forced-dark .field textarea,html.forced-dark .score-input{background:#161231;border-color:#3A3260;color:#EFECFF}
-html.forced-dark .field input:focus,html.forced-dark .input:focus{background:#1B1638;border-color:#8B76FF}
-html.forced-dark .muted,html.forced-dark .stat-label,html.forced-dark .stat-note,
-html.forced-dark .field label,html.forced-dark .field .hint,html.forced-dark .mark-sub,
-html.forced-dark .test-meta,html.forced-dark .legend,html.forced-dark .section-head p{color:#AFA7D6}
-html.forced-dark .roll{background:#2C2450;color:#C9BCFF}
-html.forced-dark .seg{background:#161231}
-html.forced-dark .seg button{color:#AFA7D6}
-html.forced-dark .btn{background:#2A2447;color:#C9BCFF}
-html.forced-dark .btn-ghost{background:transparent;border-color:#3A3260;color:#AFA7D6}
-html.forced-dark .btn-danger{background:#3A1B2B;color:#FF9AB0}
-html.forced-dark .notice{background:#3A2E12;border-color:#5C4A18;color:#FFD98A}
-html.forced-dark .alert{background:#3A1B2B;border-color:#5C2740;color:#FFAFC1}
-html.forced-dark .chip.grey{background:#2A2447;color:#B6AEDA}
-html.forced-dark .bar{background:#2A2447}
-html.forced-dark .auth-side{background:linear-gradient(150deg,#4B2FD6,#7A57F0 45%,#E6508A)}
-html.forced-dark .modal-back{background:rgba(8,5,20,.78)}
-html.forced-dark .empty,html.forced-dark .empty b{color:#AFA7D6}
-html.forced-dark .stat .stat-num,html.forced-dark .kv .v,html.forced-dark .test-name,
-html.forced-dark .mark-name,html.forced-dark .section-head h2,html.forced-dark .card-title h3,
-html.forced-dark .modal-head h3{color:#EFECFF}
-html.forced-dark .x-btn{background:#2A2447;color:#AFA7D6}
-html.forced-dark .hero{background:#1B1533 !important;background-image:none !important;animation:none;box-shadow:none}
-html.forced-dark .brand-name{background:none;-webkit-background-clip:border-box;background-clip:border-box;color:#fff}
-html.forced-dark .hero-btn,html.forced-dark .role-chip{background:#241D45;border-color:#3A3260;color:#EFECFF;backdrop-filter:none;-webkit-backdrop-filter:none}
-html.forced-dark .hero-btn:hover{background:#2E2656}
-html.forced-dark .lang-btn{background:#332B60;color:#C9BCFF;border-color:#463C7E}
-html.forced-dark .brand-mark{background:#241D45;border-color:#3A3260}
-html.forced-dark .lang-pill{background:#241D45;border-color:#3A3260;color:#C9BCFF;backdrop-filter:none;-webkit-backdrop-filter:none}
-html.forced-dark .seg{background:#161231;border-color:#332C55}
-html.forced-dark .table-wrap{background:#1A1533}
-html.forced-dark thead th{background:#251F42}
+html:is(.forced-dark,[data-theme="dark"]) body{background:#141026;color:#EFECFF}
+html:is(.forced-dark,[data-theme="dark"]) .blob{opacity:.2;filter:blur(92px)}
+html:is(.forced-dark,[data-theme="dark"]) .card,html:is(.forced-dark,[data-theme="dark"]) .stat,html:is(.forced-dark,[data-theme="dark"]) .auth-card,
+html:is(.forced-dark,[data-theme="dark"]) .modal,html:is(.forced-dark,[data-theme="dark"]) .nav{backdrop-filter:none;-webkit-backdrop-filter:none}
+html:is(.forced-dark,[data-theme="dark"]) .card,html:is(.forced-dark,[data-theme="dark"]) .stat,html:is(.forced-dark,[data-theme="dark"]) .nav,html:is(.forced-dark,[data-theme="dark"]) .modal,
+html:is(.forced-dark,[data-theme="dark"]) .modal-head,html:is(.forced-dark,[data-theme="dark"]) .auth-card,html:is(.forced-dark,[data-theme="dark"]) .test-card,
+html:is(.forced-dark,[data-theme="dark"]) .kv > div,html:is(.forced-dark,[data-theme="dark"]) .brand-mark,html:is(.forced-dark,[data-theme="dark"]) .hero-btn,
+html:is(.forced-dark,[data-theme="dark"]) .role-chip{background:#1E1936;border-color:#332C55;color:#EFECFF}
+html:is(.forced-dark,[data-theme="dark"]) .nav button{color:#AFA7D6}
+html:is(.forced-dark,[data-theme="dark"]) .nav button:hover{background:#2A2447;color:#EFECFF}
+html:is(.forced-dark,[data-theme="dark"]) .nav button.active{background:linear-gradient(135deg,#6A4BFF,#A17BFF 42%,#FF6B9D);color:#fff}
+html:is(.forced-dark,[data-theme="dark"]) thead th{background:#251F42;color:#C4BBEC;border-bottom-color:#332C55}
+html:is(.forced-dark,[data-theme="dark"]) tbody td{border-bottom-color:#2A2447}
+html:is(.forced-dark,[data-theme="dark"]) tbody tr:hover{background:#241E3F}
+html:is(.forced-dark,[data-theme="dark"]) .input,html:is(.forced-dark,[data-theme="dark"]) .field input,html:is(.forced-dark,[data-theme="dark"]) .field select,
+html:is(.forced-dark,[data-theme="dark"]) .field textarea,html:is(.forced-dark,[data-theme="dark"]) .score-input{background:#161231;border-color:#3A3260;color:#EFECFF}
+html:is(.forced-dark,[data-theme="dark"]) .field input:focus,html:is(.forced-dark,[data-theme="dark"]) .input:focus{background:#1B1638;border-color:#8B76FF}
+html:is(.forced-dark,[data-theme="dark"]) .muted,html:is(.forced-dark,[data-theme="dark"]) .stat-label,html:is(.forced-dark,[data-theme="dark"]) .stat-note,
+html:is(.forced-dark,[data-theme="dark"]) .field label,html:is(.forced-dark,[data-theme="dark"]) .field .hint,html:is(.forced-dark,[data-theme="dark"]) .mark-sub,
+html:is(.forced-dark,[data-theme="dark"]) .test-meta,html:is(.forced-dark,[data-theme="dark"]) .legend,html:is(.forced-dark,[data-theme="dark"]) .section-head p{color:#AFA7D6}
+html:is(.forced-dark,[data-theme="dark"]) .roll{background:#2C2450;color:#C9BCFF}
+html:is(.forced-dark,[data-theme="dark"]) .seg{background:#161231}
+html:is(.forced-dark,[data-theme="dark"]) .seg button{color:#AFA7D6}
+html:is(.forced-dark,[data-theme="dark"]) .btn{background:#2A2447;color:#C9BCFF}
+html:is(.forced-dark,[data-theme="dark"]) .btn-ghost{background:transparent;border-color:#3A3260;color:#AFA7D6}
+html:is(.forced-dark,[data-theme="dark"]) .btn-danger{background:#3A1B2B;color:#FF9AB0}
+html:is(.forced-dark,[data-theme="dark"]) .notice{background:#3A2E12;border-color:#5C4A18;color:#FFD98A}
+html:is(.forced-dark,[data-theme="dark"]) .alert{background:#3A1B2B;border-color:#5C2740;color:#FFAFC1}
+html:is(.forced-dark,[data-theme="dark"]) .chip.grey{background:#2A2447;color:#B6AEDA}
+html:is(.forced-dark,[data-theme="dark"]) .bar{background:#2A2447}
+html:is(.forced-dark,[data-theme="dark"]) .auth-side{background:linear-gradient(150deg,#4B2FD6,#7A57F0 45%,#E6508A)}
+html:is(.forced-dark,[data-theme="dark"]) .modal-back{background:rgba(8,5,20,.78)}
+html:is(.forced-dark,[data-theme="dark"]) .empty,html:is(.forced-dark,[data-theme="dark"]) .empty b{color:#AFA7D6}
+html:is(.forced-dark,[data-theme="dark"]) .stat .stat-num,html:is(.forced-dark,[data-theme="dark"]) .kv .v,html:is(.forced-dark,[data-theme="dark"]) .test-name,
+html:is(.forced-dark,[data-theme="dark"]) .mark-name,html:is(.forced-dark,[data-theme="dark"]) .section-head h2,html:is(.forced-dark,[data-theme="dark"]) .card-title h3,
+html:is(.forced-dark,[data-theme="dark"]) .modal-head h3{color:#EFECFF}
+html:is(.forced-dark,[data-theme="dark"]) .x-btn{background:#2A2447;color:#AFA7D6}
+html:is(.forced-dark,[data-theme="dark"]) .hero{background:#1B1533 !important;background-image:none !important;animation:none;box-shadow:none}
+html:is(.forced-dark,[data-theme="dark"]) .brand-name{background:none;-webkit-background-clip:border-box;background-clip:border-box;color:#fff}
+html:is(.forced-dark,[data-theme="dark"]) .hero-btn,html:is(.forced-dark,[data-theme="dark"]) .role-chip{background:#241D45;border-color:#3A3260;color:#EFECFF;backdrop-filter:none;-webkit-backdrop-filter:none}
+html:is(.forced-dark,[data-theme="dark"]) .hero-btn:hover{background:#2E2656}
+html:is(.forced-dark,[data-theme="dark"]) .lang-btn{background:#332B60;color:#C9BCFF;border-color:#463C7E}
+html:is(.forced-dark,[data-theme="dark"]) .brand-mark{background:#241D45;border-color:#3A3260}
+html:is(.forced-dark,[data-theme="dark"]) .lang-pill{background:#241D45;border-color:#3A3260;color:#C9BCFF;backdrop-filter:none;-webkit-backdrop-filter:none}
+html:is(.forced-dark,[data-theme="dark"]) .seg{background:#161231;border-color:#332C55}
+html:is(.forced-dark,[data-theme="dark"]) .table-wrap{background:#1A1533}
+html:is(.forced-dark,[data-theme="dark"]) thead th{background:#251F42}
 
 /* ============================ HERO ==================================== */
 .hero{
@@ -603,25 +604,25 @@ body::after{
 @media print{body::after{display:none}}
 
 /* forced-dark palette for the new components ---------------------------- */
-html.forced-dark .menu-pop,html.forced-dark .pal,html.forced-dark .cmd-peek{
+html:is(.forced-dark,[data-theme="dark"]) .menu-pop,html:is(.forced-dark,[data-theme="dark"]) .pal,html:is(.forced-dark,[data-theme="dark"]) .cmd-peek{
   background:#1E1936;border-color:#332C55;color:#EFECFF;backdrop-filter:none;-webkit-backdrop-filter:none
 }
-html.forced-dark .menu-pop button:hover,html.forced-dark .pal-item:hover,html.forced-dark .cmd-peek button:hover{background:#2A2447;color:#EFECFF}
-html.forced-dark .menu-group + .menu-group,html.forced-dark .pal-input,html.forced-dark .pal-foot,
-html.forced-dark .cmd-row,html.forced-dark .pal-item{border-color:#332C55}
-html.forced-dark .menu-label,html.forced-dark .pal-g,html.forced-dark .pal-foot,
-html.forced-dark .cmd-peek span,html.forced-dark .cmd-row span,html.forced-dark .pal-none{color:#AFA7D6}
-html.forced-dark kbd{background:#2A2447;border-color:#3A3260;color:#C9BCFF}
-html.forced-dark .cmd-pill{background:#241D45;border-color:#3A3260;color:#AFA7D6}
-html.forced-dark .cmd-pill:hover{background:#2E2656 !important;color:#EFECFF !important}
-html.forced-dark .cmd-peek code,html.forced-dark .cmd-row code{background:#241D45;border-color:#463C7E;color:#C9BCFF}
-html.forced-dark .hint-chip{background:#241D45;border-color:#3A3260;color:#AFA7D6}
-html.forced-dark .pal-item.on{background:linear-gradient(135deg,#6A4BFF,#A17BFF 42%,#FF6B9D);color:#fff}
-html.forced-dark .pal-item.on kbd{background:rgba(255,255,255,.2);border-color:rgba(255,255,255,.4);color:#fff}
-html.forced-dark .cmd-row em{background:#3A2E12;color:#FFD98A}
-html.forced-dark th[data-sort]:hover,html.forced-dark th[data-sort].on{color:#C9BCFF}
-html.forced-dark .pal-back{background:rgba(8,5,20,.72)}
-html.forced-dark .menu-btn,html.forced-dark .menu-btn:hover{background:#241D45;border-color:#3A3260;color:#EFECFF}
+html:is(.forced-dark,[data-theme="dark"]) .menu-pop button:hover,html:is(.forced-dark,[data-theme="dark"]) .pal-item:hover,html:is(.forced-dark,[data-theme="dark"]) .cmd-peek button:hover{background:#2A2447;color:#EFECFF}
+html:is(.forced-dark,[data-theme="dark"]) .menu-group + .menu-group,html:is(.forced-dark,[data-theme="dark"]) .pal-input,html:is(.forced-dark,[data-theme="dark"]) .pal-foot,
+html:is(.forced-dark,[data-theme="dark"]) .cmd-row,html:is(.forced-dark,[data-theme="dark"]) .pal-item{border-color:#332C55}
+html:is(.forced-dark,[data-theme="dark"]) .menu-label,html:is(.forced-dark,[data-theme="dark"]) .pal-g,html:is(.forced-dark,[data-theme="dark"]) .pal-foot,
+html:is(.forced-dark,[data-theme="dark"]) .cmd-peek span,html:is(.forced-dark,[data-theme="dark"]) .cmd-row span,html:is(.forced-dark,[data-theme="dark"]) .pal-none{color:#AFA7D6}
+html:is(.forced-dark,[data-theme="dark"]) kbd{background:#2A2447;border-color:#3A3260;color:#C9BCFF}
+html:is(.forced-dark,[data-theme="dark"]) .cmd-pill{background:#241D45;border-color:#3A3260;color:#AFA7D6}
+html:is(.forced-dark,[data-theme="dark"]) .cmd-pill:hover{background:#2E2656 !important;color:#EFECFF !important}
+html:is(.forced-dark,[data-theme="dark"]) .cmd-peek code,html:is(.forced-dark,[data-theme="dark"]) .cmd-row code{background:#241D45;border-color:#463C7E;color:#C9BCFF}
+html:is(.forced-dark,[data-theme="dark"]) .hint-chip{background:#241D45;border-color:#3A3260;color:#AFA7D6}
+html:is(.forced-dark,[data-theme="dark"]) .pal-item.on{background:linear-gradient(135deg,#6A4BFF,#A17BFF 42%,#FF6B9D);color:#fff}
+html:is(.forced-dark,[data-theme="dark"]) .pal-item.on kbd{background:rgba(255,255,255,.2);border-color:rgba(255,255,255,.4);color:#fff}
+html:is(.forced-dark,[data-theme="dark"]) .cmd-row em{background:#3A2E12;color:#FFD98A}
+html:is(.forced-dark,[data-theme="dark"]) th[data-sort]:hover,html:is(.forced-dark,[data-theme="dark"]) th[data-sort].on{color:#C9BCFF}
+html:is(.forced-dark,[data-theme="dark"]) .pal-back{background:rgba(8,5,20,.72)}
+html:is(.forced-dark,[data-theme="dark"]) .menu-btn,html:is(.forced-dark,[data-theme="dark"]) .menu-btn:hover{background:#241D45;border-color:#3A3260;color:#EFECFF}
 
 /* ============================ ENTERPRISE POLISH ======================= */
 /* eyebrow labels above section titles */
@@ -660,8 +661,8 @@ tr:hover .row-act .btn,.row-act .btn:focus-visible{opacity:1;transform:none}
 .sk-panel{height:360px}
 @keyframes shimmer{100%{transform:translateX(100%)}}
 @keyframes skPulse{from{opacity:.7}to{opacity:1}}
-html.forced-dark .sk{background:#241D45}
-html.forced-dark .sk::after{background:linear-gradient(90deg,transparent,rgba(255,255,255,.07),transparent)}
+html:is(.forced-dark,[data-theme="dark"]) .sk{background:#241D45}
+html:is(.forced-dark,[data-theme="dark"]) .sk::after{background:linear-gradient(90deg,transparent,rgba(255,255,255,.07),transparent)}
 
 /* view enter transition — only while a view is loading */
 #view.view-enter > *{animation:viewIn .4s cubic-bezier(.2,.85,.3,1) both}
@@ -700,10 +701,10 @@ html.forced-dark .sk::after{background:linear-gradient(90deg,transparent,rgba(25
 .lo-native{font-size:16px;font-weight:600;white-space:nowrap}
 .lo-en{font-size:12.4px;color:var(--ink-2)}
 .lo-check{margin-left:auto;font-weight:700;color:var(--violet-d)}
-html.forced-dark .lang-opt{background:#1E1936;border-color:#332C55;color:#EFECFF}
-html.forced-dark .lang-opt.on{background:#241D45;border-color:#8B76FF}
-html.forced-dark .lo-en{color:#AFA7D6}
-html.forced-dark .lo-check{color:#C9BCFF}
+html:is(.forced-dark,[data-theme="dark"]) .lang-opt{background:#1E1936;border-color:#332C55;color:#EFECFF}
+html:is(.forced-dark,[data-theme="dark"]) .lang-opt.on{background:#241D45;border-color:#8B76FF}
+html:is(.forced-dark,[data-theme="dark"]) .lo-en{color:#AFA7D6}
+html:is(.forced-dark,[data-theme="dark"]) .lo-check{color:#C9BCFF}
 
 /* Arabic (RTL) — mirror the one-sided details */
 [dir=rtl] .cmd-peek{left:auto;right:0}
@@ -796,3 +797,60 @@ html.forced-dark .lo-check{color:#C9BCFF}
 .trend-pt{opacity:0;animation:trendFade .3s ease forwards;animation-delay:calc(1.05s + var(--i) * .05s)}
 .trend-dot{transform:scale(0);transform-box:fill-box;transform-origin:center;
   animation:trendPop .4s cubic-bezier(.3,1.5,.6,1) forwards;animation-delay:calc(1.05s + var(--i) * .05s)}
+
+/* ============================ THEME PICKER ============================ */
+.theme-grid{display:grid;grid-template-columns:1fr;gap:10px}
+@media(min-width:560px){.theme-grid{grid-template-columns:repeat(3,1fr)}}
+.theme-opt{display:flex;align-items:center;gap:12px;border:1.6px solid var(--line);
+  background:rgba(255,255,255,.72);border-radius:14px;padding:14px;cursor:pointer;
+  transition:.16s ease;text-align:start}
+.theme-opt:hover{border-color:var(--violet-l);transform:translateY(-2px);box-shadow:var(--shadow-sm)}
+.theme-opt.on{border-color:var(--violet);background:linear-gradient(160deg,rgba(124,92,252,.12),rgba(255,107,157,.10))}
+.theme-opt .to-ic{font-size:22px;line-height:1}
+.theme-opt .to-tx{display:flex;flex-direction:column;gap:1px}
+.theme-opt .to-name{font-size:14.5px;font-weight:600}
+.theme-opt .to-sub{font-size:11.8px;color:var(--ink-2)}
+.theme-opt .lo-check{margin-left:auto;font-weight:700;color:var(--violet-d)}
+html:is(.forced-dark,[data-theme="dark"]) .theme-opt{background:#1E1936;border-color:#332C55;color:#EFECFF}
+html:is(.forced-dark,[data-theme="dark"]) .theme-opt.on{background:#241D45;border-color:#8B76FF}
+html:is(.forced-dark,[data-theme="dark"]) .theme-opt .to-sub{color:#AFA7D6}
+
+/* ============================ HELP ASSISTANT ========================== */
+.help-wrap{display:flex;flex-direction:column;gap:14px}
+.help-intro{margin:0;color:var(--ink-2);font-size:13.6px;line-height:1.6}
+.help-chips{display:flex;flex-wrap:wrap;gap:8px}
+.help-chip{
+  border:1.4px solid var(--line);background:rgba(255,255,255,.7);color:var(--ink-2);
+  border-radius:999px;padding:7px 13px;font-size:12.8px;cursor:pointer;transition:.16s ease;text-align:start
+}
+.help-chip:hover{border-color:var(--violet-l);color:var(--violet-d);transform:translateY(-1px)}
+.help-log{display:flex;flex-direction:column;gap:12px;max-height:46vh;overflow-y:auto;padding:4px 2px}
+.help-msg{display:flex;gap:10px;align-items:flex-start;max-width:94%}
+.help-msg.me{align-self:flex-end;flex-direction:row-reverse}
+.help-ava{width:30px;height:30px;border-radius:10px;flex:none;display:grid;place-items:center;font-size:15px;
+  background:var(--grad-soft);border:1px solid var(--ring)}
+.help-msg.me .help-ava{background:rgba(124,92,252,.14)}
+.help-bubble{
+  background:#F4F2FC;border:1px solid var(--line);border-radius:14px;padding:11px 14px;
+  font-size:14px;line-height:1.6;white-space:pre-wrap;word-break:break-word
+}
+.help-msg.me .help-bubble{background:var(--grad);color:#fff;border-color:transparent}
+.help-typing .help-bubble{display:flex;gap:5px;align-items:center}
+.help-typing i{width:7px;height:7px;border-radius:50%;background:var(--violet-l);animation:helpDot 1s infinite ease-in-out}
+.help-typing i:nth-child(2){animation-delay:.15s}
+.help-typing i:nth-child(3){animation-delay:.3s}
+@keyframes helpDot{0%,80%,100%{opacity:.3;transform:translateY(0)}40%{opacity:1;transform:translateY(-4px)}}
+.help-form{display:flex;gap:8px;align-items:center}
+.help-form .input{flex:1;min-width:0}
+.help-note{margin:0;font-size:11.8px;color:var(--ink-2);line-height:1.5}
+.help-link{border:0;background:transparent;color:var(--violet-d);font-weight:600;font-size:13px;cursor:pointer;padding:0}
+.help-link:hover{text-decoration:underline}
+html:is(.forced-dark,[data-theme="dark"]) .help-bubble{background:#241D45;border-color:#332C55;color:#EFECFF}
+html:is(.forced-dark,[data-theme="dark"]) .help-chip{background:#1E1936;border-color:#332C55;color:#AFA7D6}
+html:is(.forced-dark,[data-theme="dark"]) .help-chip:hover{border-color:#8B76FF;color:#C9BCFF}
+html:is(.forced-dark,[data-theme="dark"]) .help-ava{background:#241D45;border-color:#3A3260}
+html:is(.forced-dark,[data-theme="dark"]) .help-form .input{background:#161231;border-color:#3A3260;color:#EFECFF}
+html:is(.forced-dark,[data-theme="dark"]) .help-link{color:#C9BCFF}
+
+/* an author-written tell for the hero: a small, itself-cropped action row */
+.hero-actions .hero-btn.help-btn{font-weight:600}

@@ -122,6 +122,32 @@ def main():
           isinstance(appjs, str) and "serviceWorker" in appjs and ".register(" in appjs)
     check("sign-out clears cached data", isinstance(appjs, str) and "clearApiCache" in appjs)
 
+    print("theme + help assistant")
+    css = call("GET", "/style.css")
+    check("stylesheet supports an explicit dark theme",
+          isinstance(css, str) and '[data-theme="dark"]' in css)
+    check("stylesheet styles the theme picker and assistant",
+          isinstance(css, str) and ".theme-opt" in css and ".help-bubble" in css)
+    check("app wires the theme preference and picker",
+          isinstance(appjs, str) and "initTheme" in appjs and "openThemePicker" in appjs)
+    check("app ships the help assistant",
+          isinstance(appjs, str) and "openHelp" in appjs and "/api/support" in appjs)
+    check("assistant renders replies as text, never markup",
+          isinstance(appjs, str) and "bub.textContent = text" in appjs)
+    i18n = call("GET", "/i18n.js")
+    check("i18n carries the new theme and help strings",
+          isinstance(i18n, str) and "'theme.system'" in i18n and "'help.greeting'" in i18n)
+
+    sup = call("POST", "/api/support",
+               {"messages": [{"role": "user", "content": "How do I add a student?"}]})
+    check("support endpoint answers (unconfigured without a key)",
+          sup.get("configured") is False and sup.get("reply") is None, str(sup))
+    bad = call("POST", "/api/support", {}, expect=400)
+    check("support rejects a missing message list", "error" in bad)
+    nonuser = call("POST", "/api/support",
+                   {"messages": [{"role": "assistant", "content": "hi"}]}, expect=400)
+    check("support requires a user-turn last message", "error" in nonuser)
+
     print("status / setup")
     st = call("GET", "/api/status")
     check("status shape", st.get("setup_required") in (True, False), str(st))

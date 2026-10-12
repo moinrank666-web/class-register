@@ -48,10 +48,10 @@ palette, or by typing `:lang ta` in the roster search bar — a picker lists all
 their native names. The choice is saved per browser and applies instantly to every
 screen, month names and error messages. Arabic flips the whole layout to right-to-left.
 
-All strings live in `static/i18n.js`: one dictionary per language with 256 keys and a
-`{placeholder}` syntax. Missing keys fall back to English, so a partial translation can
-never break the UI. To add a language, add one dictionary entry, one `MONTHS` list and
-one row in `LANGS`.
+All strings live in `static/i18n.js`: one dictionary per language, with `{placeholder}`
+substitution. A missing key falls back to English, so a half-finished translation can
+never break the UI. To add a language, add a dictionary, a `MONTHS` list and a row in
+`LANGS`.
 
 ## Command menu & hidden commands
 
@@ -137,6 +137,36 @@ Offline behaviour:
   session. Marking attendance, saving scores and other changes need the
   server — offline they fail with a clear "You are offline" message.
 
+## Appearance: light, dark or system
+
+A **🎨 Theme** pill sits on the sign-in screen and in the app header (also in the
+menu and the command palette). Pick **Light**, **Dark**, or **System** to follow your
+device — the choice is remembered per browser. Dark keeps the same layout with a
+softer palette, and choosing Light keeps the page light even when the browser would
+try to auto-darken it.
+
+## Help desk (optional)
+
+Every screen offers **💬 Help** — the header button, the menu, the command palette,
+and a *Need a hand?* link under the sign-in form. It opens a small help desk that
+answers questions about the register (signing in, students, attendance, scores,
+reports, codes) and remembers the last few turns of the chat.
+
+The answers come from any OpenAI-compatible chat-completions endpoint. It is **off
+by default**; switch it on with environment variables:
+
+| Variable | Purpose |
+|---|---|
+| `SUPPORT_API_KEY` | Your provider key. Read server-side only — never sent to the browser. |
+| `SUPPORT_API_URL` | Endpoint URL. Defaults to Groq (`https://api.groq.com/openai/v1/chat/completions`). |
+| `SUPPORT_MODEL` | Model name. Defaults to `llama-3.3-70b-versatile`. |
+
+`GROQ_API_KEY` also works as a fallback for `SUPPORT_API_KEY`. With no key the help
+desk still opens and simply says it is not switched on yet, so the UI never breaks.
+Questions are capped at 20 per minute per IP address. Only the text you type is sent
+to the provider, alongside a short description of what the app does — never student
+data or an access code.
+
 ## Get found on Google
 
 Everything crawlers need ships with the app: an indexable title/description with
@@ -180,7 +210,9 @@ python test_api.py http://127.0.0.1:8766
 ```
 
 `test_api.py` covers setup, both roles and their permissions, student validation,
-attendance upserts, score limits, report maths, student detail, CSV export and code changes.
+attendance upserts, score limits, report maths, student detail, CSV export, code
+changes, the theme and help-desk wiring, and the support endpoint's validation and
+unconfigured response.
 
 ## Files
 

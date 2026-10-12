@@ -30,6 +30,8 @@ from contextlib import contextmanager
 from datetime import datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlparse, parse_qs
+from urllib.error import HTTPError, URLError
+from urllib.request import Request, urlopen
 
 # --------------------------------------------------------------------------
 # Configuration
@@ -88,6 +90,86 @@ PBKDF2_ITERATIONS = 600_000                # OWASP-recommended PBKDF2-SHA256 wor
 RATE_WINDOW_SECONDS = 60
 RATE_MAX_FAILURES = 8
 RATE_LOCKOUT_SECONDS = 600
+
+# --------------------------------------------------------------------------
+# Help assistant (optional). It speaks to any OpenAI-compatible
+# chat-completions endpoint — Groq by default. Enable it by setting
+# SUPPORT_API_KEY (or GROQ_API_KEY). The key is read server-side only and is
+# never sent to the browser.
+# --------------------------------------------------------------------------
+SUPPORT_API_KEY = (os.environ.get("SUPPORT_API_KEY") or os.environ.get("GROQ_API_KEY") or "").strip()
+SUPPORT_API_URL = os.environ.get(
+    "SUPPORT_API_URL", "https://api.groq.com/openai/v1/chat/completions").strip()
+SUPPORT_MODEL = os.environ.get("SUPPORT_MODEL", "llama-3.3-70b-versatile").strip()
+SUPPORT_MAX_MESSAGES = 10          # most recent turns kept
+SUPPORT_MAX_CHARS = 2000           # per-message cap
+SUPPORT_TIMEOUT = 25               # seconds
+SUPPORT_WINDOW_SECONDS = 60
+SUPPORT_MAX_PER_WINDOW = 20        # questions per IP per minute
+SUPPORT_HITS = {}                  # ip -> [window_start, count]
+
+SUPPORT_SYSTEM = (
+    "You are the friendly help assistant built into 'Academic Ledger', a "
+    "password-protected class register web app for teachers.\n"
+    "What the app does:\n"
+    "- Students: a roster of names, each with a grade and a 3-digit roll number. Admins and "
+    "teachers add or remove students; a grade and roll number together must be unique.\n"
+    "- Attendance: mark each student present, absent or late for a chosen date, then see "
+    "per-student and class totals.\n"
+    "- Test scores: create a monthly test with a maximum score, enter each student's score, "
+    "and the app works out totals, percentages, letter grades and class ranks.\n"
+    "- Reports: a monthly performance report with a CSV download and an attendance trend chart.\n"
+    "- Roles: an admin code manages students, attendance and codes and sees an activity log; a "
+    "teacher code adds students and enters scores; an optional observer code is read-only.\n"
+    "- Codes: stored as salted hashes, so they cannot be recovered. Only an admin can change "
+    "them, from the Codes screen.\n"
+    "- The app installs like an app (works offline) and is available in ten languages.\n"
+    "How to answer:\n"
+    "- Only answer questions about this app. For anything else, say briefly that you can only "
+    "help with Academic Ledger.\n"
+    "- Be warm and concise: at most about 120 words, plain language, no markdown headings.\n"
+    "- Never invent features. If you are unsure, say so and point to the relevant screen.\n"
+    "- Never ask for, repeat or guess anyone's access code."
+)
+
+
+def support_rate_check(ip: str) -> int:
+    """Seconds this IP must wait before asking again (0 = allowed)."""
+    now = time.time()
+    with LOGIN_ATTEMPTS_LOCK:
+        if len(SUPPORT_HITS) > 4096:     # bound memory in a long-lived process
+            for k, rec in list(SUPPORT_HITS.items()):
+                if now - rec[0] > SUPPORT_WINDOW_SECONDS:
+                    SUPPORT_HITS.pop(k, None)
+        rec = SUPPORT_HITS.get(ip)
+        if not rec or now - rec[0] > SUPPORT_WINDOW_SECONDS:
+            SUPPORT_HITS[ip] = [now, 1]
+            return 0
+        if rec[1] >= SUPPORT_MAX_PER_WINDOW:
+            return int(SUPPORT_WINDOW_SECONDS - (now - rec[0])) + 1
+        rec[1] += 1
+        return 0
+
+
+def ask_support(messages):
+    """Forward the conversation to the configured endpoint; return the reply text."""
+    payload = json.dumps({
+        "model": SUPPORT_MODEL,
+        "messages": [{"role": "system", "content": SUPPORT_SYSTEM}] + messages,
+        "temperature": 0.3,
+        "max_tokens": 500,
+    }).encode("utf-8")
+    req = Request(SUPPORT_API_URL, data=payload, method="POST", headers={
+        "Content-Type": "application/json",
+        "Authorization": "Bearer " + SUPPORT_API_KEY,
+        "User-Agent": "AcademicLedger/1.0",
+    })
+    with urlopen(req, timeout=SUPPORT_TIMEOUT) as res:
+        body = json.loads(res.read().decode("utf-8", "replace"))
+    choices = body.get("choices") or []
+    if not choices:
+        return ""
+    return ((choices[0].get("message") or {}).get("content") or "").strip()
 
 HTML_CSP = ("default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; "
             "img-src 'self' data: blob:; font-src 'self'; connect-src 'self'; "
@@ -849,6 +931,60 @@ class Handler(BaseHTTPRequestHandler):
         # --- public ---
         if method == "GET" and path == "/api/status":
             self.send_json({"setup_required": setup_required(), "app": "Academic Ledger"})
+            return
+
+        # Help assistant — public (people may need help before signing in) but
+        # rate-limited. Without a key it reports itself as unconfigured rather
+        # than failing, so the UI can show a graceful fallback.
+        if method == "POST" and path == "/api/support":
+            raw = self.body().get("messages")
+            if not isinstance(raw, list) or not raw:
+                self.fail("A list of messages is required.", 400)
+                return
+            clean = []
+            for m in raw[-SUPPORT_MAX_MESSAGES:]:
+                if not isinstance(m, dict):
+                    continue
+                role, content = m.get("role"), m.get("content")
+                if role not in ("user", "assistant") or not isinstance(content, str):
+                    continue
+                content = content.strip()
+                if content:
+                    clean.append({"role": role, "content": content[:SUPPORT_MAX_CHARS]})
+            if not clean or clean[-1]["role"] != "user":
+                self.fail("A user message is required.", 400)
+                return
+            if not SUPPORT_API_KEY:
+                self.send_json({"configured": False, "reply": None})
+                return
+            wait = support_rate_check(self.client_ip())
+            if wait:
+                self.fail(f"Too many questions. Try again in {wait} seconds.", 429,
+                          extra={"Retry-After": str(wait)})
+                return
+            try:
+                reply = ask_support(clean)
+            except HTTPError as exc:
+                detail = ""
+                try:
+                    detail = exc.read().decode("utf-8", "replace")[:300]
+                except Exception:
+                    pass
+                print(f"[support] provider HTTP {exc.code}: {detail}", file=sys.stderr)
+                self.fail("The help assistant is unavailable right now.", 502)
+                return
+            except (URLError, TimeoutError, OSError) as exc:
+                print(f"[support] network error: {exc}", file=sys.stderr)
+                self.fail("The help assistant could not be reached.", 502)
+                return
+            except Exception:
+                traceback.print_exc()
+                self.fail("The help assistant failed to answer.", 502)
+                return
+            if not reply:
+                self.fail("The help assistant returned an empty answer.", 502)
+                return
+            self.send_json({"configured": True, "reply": reply})
             return
 
         if method == "POST" and path == "/api/setup":

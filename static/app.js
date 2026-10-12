@@ -116,8 +116,8 @@ async function clearApiCache() {
 
 /* Language toggle — re-renders whatever screen is showing, in the new language. */
 function bindLang() {
-  const b = $('#btn-lang'); if (!b) return;
-  b.onclick = openLangPicker;
+  const l = $('#btn-lang'); if (l) l.onclick = openLangPicker;
+  const t = $('#btn-theme'); if (t) t.onclick = openThemePicker;
 }
 
 /* language picker — 10 languages in one modal (works on auth screens too) */
@@ -161,7 +161,10 @@ function authShell(inner) {
             <li>🔐 <span>${T('hero.point2')}</span></li>
             <li>📊 <span>${T('hero.point3')}</span></li>
           </ul>
-          <button class="lang-pill on-dark" id="btn-lang">🌐 ${T('menu.lang')}</button>
+          <div style="display:flex;gap:10px;flex-wrap:wrap;align-self:flex-start">
+            <button class="lang-pill on-dark" id="btn-lang">🌐 ${T('menu.lang')}</button>
+            <button class="lang-pill on-dark" id="btn-theme">🎨 ${themeLabel()}</button>
+          </div>
         </div>
         <div class="auth-form">${inner}</div>
       </div>
@@ -232,7 +235,8 @@ function renderLogin(message = '') {
       <button class="btn btn-primary" style="width:100%;justify-content:center" type="submit">${T('login.submit')}</button>
     </form>
     <p class="muted" style="font-size:12.6px;margin-top:18px;text-align:center">
-      ${T('login.lost')}
+      ${T('login.lost')}<br>
+      <button type="button" class="help-link" id="login-help">💬 ${T('help.open')}</button>
     </p>`);
   let role = 'admin';
   $('#role-tabs').addEventListener('click', e => {
@@ -260,6 +264,7 @@ function renderLogin(message = '') {
       $('#login-code').focus();
     }
   });
+  const lh = $('#login-help'); if (lh) lh.onclick = openHelp;
   setTimeout(() => $('#login-code').focus(), 60);
 }
 
@@ -285,6 +290,8 @@ function renderShell() {
         </div>
         <div class="hero-actions">
           <span class="role-chip">${T('role.' + (App.role || 'teacher') + '.chip')}</span>
+          <button class="hero-btn help-btn" id="btn-help">💬 ${T('help.label')}</button>
+          <button class="hero-btn" id="btn-theme-top">🎨 ${themeLabel()}</button>
           <div class="menu-anchor">
             <button class="hero-btn menu-btn" id="btn-menu" aria-haspopup="menu" aria-expanded="false">${T('menu.open')}</button>
             <div class="menu-pop" id="menu-pop" role="menu" hidden>${menuHtml()}</div>
@@ -308,6 +315,8 @@ function renderShell() {
 
   $('#btn-menu').onclick = e => { e.stopPropagation(); toggleMenu(); };
   $('#btn-pal').onclick = openPalette;
+  $('#btn-help').onclick = openHelp;
+  $('#btn-theme-top').onclick = openThemePicker;
   $('#menu-pop').addEventListener('click', e => {
     const b = e.target.closest('button[data-a]'); if (!b) return;
     closeMenu(); runAction(b.dataset.a);
@@ -1218,8 +1227,10 @@ function menuHtml() {
     </div>
     <div class="menu-group"><span class="menu-label">${T('menu.prefs')}</span>
       ${item('lang', '🌐', T('menu.lang'), langNative(getLang()))}
+      ${item('theme', '🎨', T('theme.label'), themeLabel())}
       ${App.role === 'admin' ? item('codes', '⚙️', T('menu.codes')) : ''}
-      ${item('help', '', T('cmd.help.title'))}
+      ${item('ask', '💬', T('help.title'))}
+      ${item('help', '⌨️', T('cmd.help.title'))}
     </div>
     <div class="menu-group">
       ${item('out', '⎋', T('menu.out'))}
@@ -1240,6 +1251,8 @@ function closeMenu() {
 /* one dispatcher for menu items and palette actions */
 function runAction(a) {
   if (a === 'lang')   { openLangPicker(); return; }
+  if (a === 'theme')  { openThemePicker(); return; }
+  if (a === 'ask')    { openHelp(); return; }
   if (a === 'print')  { window.print(); return; }
   if (a === 'export') { exportCsv(App.filters.report.month, App.filters.report.grade); return; }
   if (a === 'out')    { signOut(); return; }
@@ -1264,9 +1277,11 @@ function paletteItems() {
   items.push({ g: 'act', icon: '⬇️', label: T('menu.export'), run: () => runAction('export') });
   items.push({ g: 'act', icon: '🖨️', label: T('menu.print'), run: () => runAction('print') });
   items.push({ g: 'prefs', icon: '🌐', label: T('menu.lang'), right: langNative(getLang()), run: () => runAction('lang') });
+  items.push({ g: 'prefs', icon: '🎨', label: T('theme.label'), right: themeLabel(), run: () => runAction('theme') });
   if (App.role === 'admin')
     items.push({ g: 'prefs', icon: '⚙️', label: T('menu.codes'), run: () => runAction('codes') });
-  items.push({ g: 'prefs', icon: '', label: T('cmd.help.title'), run: showCmdHelp });
+  items.push({ g: 'prefs', icon: '💬', label: T('help.title'), run: () => runAction('ask') });
+  items.push({ g: 'prefs', icon: '⌨️', label: T('cmd.help.title'), run: showCmdHelp });
   items.push({ g: 'prefs', icon: '⎋', label: T('menu.out'), run: () => runAction('out') });
   return items;
 }
@@ -1434,21 +1449,168 @@ document.addEventListener('keydown', e => {
 });
 document.addEventListener('click', e => { if (!e.target.closest('.menu-anchor')) closeMenu(); });
 
-/* ------------------------------ boot ------------------------------ */
-function detectForcedDark() {
-  // Chrome may auto-darken light sites; when that happens we swap in a curated palette.
+/* ------------------------------ theme ------------------------------ */
+const THEME_KEY = 'cr_theme';
+const mqDark = (typeof matchMedia === 'function') ? matchMedia('(prefers-color-scheme: dark)') : null;
+
+/* Preference is light | dark | system; the resolved value is always one of
+   light/dark so the stylesheet only ever sees an explicit theme. */
+function themePref() {
   try {
-    const d = document.createElement('div');
-    d.style.cssText = 'display:none;background-color:canvas;color-scheme:light';
-    document.body.appendChild(d);
-    const dark = getComputedStyle(d).backgroundColor !== 'rgb(255, 255, 255)';
-    d.remove();
-    if (dark) document.documentElement.classList.add('forced-dark');
-  } catch (_) { /* detection is best-effort */ }
+    const v = localStorage.getItem(THEME_KEY);
+    return (v === 'light' || v === 'dark') ? v : 'system';
+  } catch (_) { return 'system'; }
+}
+function resolveTheme(pref) {
+  if (pref === 'dark' || pref === 'light') return pref;
+  return (mqDark && mqDark.matches) ? 'dark' : 'light';
+}
+function applyTheme(pref) {
+  const dark = resolveTheme(pref) === 'dark';
+  const el = document.documentElement;
+  el.setAttribute('data-theme', dark ? 'dark' : 'light');
+  el.classList.remove('forced-dark');
+  // 'only light' opts out of Chrome's automatic darkening, so Light stays light.
+  el.style.colorScheme = dark ? 'dark' : 'only light';
+  try { localStorage.setItem(THEME_KEY, pref); } catch (_) { /* private mode */ }
+  const meta = document.querySelector('meta[name="theme-color"]');
+  if (meta) meta.setAttribute('content', dark ? '#141026' : '#6D4AFF');
+}
+function themeLabel() {
+  const p = themePref();
+  return p === 'dark' ? T('theme.dark') : p === 'light' ? T('theme.light') : T('theme.system');
+}
+function openThemePicker() {
+  const cur = themePref();
+  const opts = [
+    ['light', '☀️', 'theme.light', 'theme.light.sub'],
+    ['dark', '🌙', 'theme.dark', 'theme.dark.sub'],
+    ['system', '🖥️', 'theme.system', 'theme.system.sub'],
+  ];
+  openModal({
+    title: T('theme.title'),
+    body: `<div class="theme-grid">${opts.map(([v, ic, name, sub]) => `
+      <button type="button" class="theme-opt${v === cur ? ' on' : ''}" data-t="${v}">
+        <span class="to-ic">${ic}</span>
+        <span class="to-tx"><span class="to-name">${esc(T(name))}</span><span class="to-sub">${esc(T(sub))}</span></span>
+        ${v === cur ? '<span class="lo-check">✓</span>' : ''}
+      </button>`).join('')}</div>`,
+  });
+  $('#modal-body').addEventListener('click', e => {
+    const b = e.target.closest('button[data-t]'); if (!b) return;
+    applyTheme(b.dataset.t);
+    closeModal();
+    toast('🎨 ' + themeLabel());
+    const top = $('#btn-theme-top'); if (top) top.textContent = '🎨 ' + themeLabel();
+  });
+}
+function initTheme() {
+  applyTheme(themePref());
+  if (!mqDark) return;
+  const onChange = () => { if (themePref() === 'system') applyTheme('system'); };
+  try { mqDark.addEventListener('change', onChange); }
+  catch (_) { try { mqDark.addListener(onChange); } catch (__) { /* older engines */ } }
 }
 
+/* --------------------------- help assistant ------------------------- */
+const HELP_STARTERS = ['help.q1', 'help.q2', 'help.q3', 'help.q4'];
+const HELP_HISTORY_LIMIT = 8;
+
+function openHelp() {
+  const history = [];
+  openModal({
+    title: '💬 ' + T('help.title'),
+    wide: true,
+    body: `
+      <div class="help-wrap">
+        <p class="help-intro">${esc(T('help.intro'))}</p>
+        <div class="help-chips" id="help-chips">
+          ${HELP_STARTERS.map(k => `<button type="button" class="help-chip" data-q="${esc(T(k))}">${esc(T(k))}</button>`).join('')}
+        </div>
+        <div class="help-log" id="help-log" aria-live="polite"></div>
+        <form class="help-form" id="help-form">
+          <input class="input" id="help-input" autocomplete="off" maxlength="500" placeholder="${esc(T('help.placeholder'))}">
+          <button class="btn btn-primary" type="submit" id="help-send">${T('help.send')}</button>
+        </form>
+        <p class="help-note">${esc(T('help.note'))}</p>
+      </div>`,
+  });
+
+  const log = $('#help-log');
+  let busy = false;
+
+  const bubble = (who, text) => {
+    const row = document.createElement('div');
+    row.className = 'help-msg ' + (who === 'me' ? 'me' : 'bot');
+    const ava = document.createElement('span');
+    ava.className = 'help-ava';
+    ava.textContent = who === 'me' ? '🧑' : '📚';
+    const bub = document.createElement('div');
+    bub.className = 'help-bubble';
+    bub.textContent = text;   // textContent: model output is never treated as markup
+    row.append(ava, bub);
+    log.appendChild(row);
+    log.scrollTop = log.scrollHeight;
+    return row;
+  };
+  const typing = () => {
+    const row = document.createElement('div');
+    row.className = 'help-msg bot help-typing';
+    row.innerHTML = '<span class="help-ava">📚</span><div class="help-bubble"><i></i><i></i><i></i></div>';
+    log.appendChild(row);
+    log.scrollTop = log.scrollHeight;
+    return row;
+  };
+
+  bubble('bot', T('help.greeting'));
+
+  const send = async text => {
+    text = String(text || '').trim();
+    if (!text || busy) return;
+    busy = true;
+    bubble('me', text);
+    history.push({ role: 'user', content: text });
+    const wait = typing();
+    try {
+      const res = await fetch('/api/support', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ messages: history.slice(-HELP_HISTORY_LIMIT) }),
+      });
+      const data = await res.json().catch(() => ({}));
+      wait.remove();
+      if (res.status === 429) { bubble('bot', T('help.busy')); }
+      else if (!res.ok) { bubble('bot', T('help.error')); }
+      else if (data.configured === false) { bubble('bot', T('help.unconfigured')); }
+      else {
+        const reply = String(data.reply || '').trim() || T('help.error');
+        bubble('bot', reply);
+        history.push({ role: 'assistant', content: reply });
+      }
+    } catch (_) {
+      wait.remove();
+      bubble('bot', T('help.offline'));
+    }
+    busy = false;
+  };
+
+  $('#help-chips').addEventListener('click', e => {
+    const b = e.target.closest('button[data-q]'); if (!b) return;
+    send(b.dataset.q);
+  });
+  $('#help-form').addEventListener('submit', e => {
+    e.preventDefault();
+    const input = $('#help-input');
+    const v = input.value;
+    input.value = '';
+    send(v);
+  });
+  setTimeout(() => { const i = $('#help-input'); if (i) i.focus(); }, 60);
+}
+
+/* ------------------------------ boot ------------------------------ */
 async function boot() {
-  detectForcedDark();
+  initTheme();
   loadAccent();
   document.documentElement.lang = getLang();
   const bootP = document.querySelector('#app .boot p');

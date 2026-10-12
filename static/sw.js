@@ -6,7 +6,7 @@
    Bump VERSION whenever the precache list or shell semantics change. */
 'use strict';
 
-const VERSION = 'v2';
+const VERSION = 'v3';
 const SHELL = 'al-shell-' + VERSION;
 const API = 'al-api-' + VERSION;
 const SHELL_URLS = [
