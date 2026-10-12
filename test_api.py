@@ -3,6 +3,7 @@
 import csv
 import io
 import json
+import re
 import sys
 import urllib.error
 import urllib.request
@@ -67,6 +68,18 @@ def main():
     check("robots.txt points at sitemap",
           isinstance(rb, str) and
           "Sitemap: https://class-register-cudp.onrender.com/sitemap.xml" in rb)
+    # A single `Disallow: /` (or a bare leading slash pattern) would block the
+    # whole site — the exact thing Search Console reports as "blocked by
+    # robots.txt". Guard against it ever reappearing.
+    check("robots.txt allows the whole site",
+          isinstance(rb, str) and "Allow: /" in rb
+          and not re.search(r"(?im)^\s*disallow:\s*/\s*$", rb), str(rb))
+    check("robots.txt blocks no path at all",
+          isinstance(rb, str) and not re.search(r"(?im)^\s*disallow:\s*\S", rb),
+          str(rb))
+    st, ct, _ = probe("/robots.txt")
+    check("robots.txt served as plain text", st == 200 and "text/plain" in ct,
+          f"{st} {ct}")
     sm = call("GET", "/sitemap.xml")
     locs = []
     if isinstance(sm, str):

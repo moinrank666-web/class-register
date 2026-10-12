@@ -199,6 +199,26 @@ no backlinks sits in the crawl queue for days to weeks. Confirm the sitemap show
 page (repeat after each deploy). Crawl signals are all green — indexing is purely a
 time-and-prominence game after this point.
 
+**"Crawl allowed? No: blocked by robots.txt"?** `static/robots.txt` allows the whole
+site — it carries `Allow: /` and no `Disallow` rule at all — so the file itself is not
+the problem. Two things produce that message when the file is fine:
+
+- **A fetch failure while the instance is asleep.** Render's free plan stops the
+  service when idle, and the first request then takes 20 s or more. Google renders a
+  failed `robots.txt` fetch with the same "blocked by robots.txt" wording, and it
+  caches whatever it got. The keep-alive workflow (`.github/workflows/keep-awake.yml`)
+  now pings the site every ten minutes *and* fails if `robots.txt` ever answers with a
+  site-wide `Disallow`, so this cannot go unnoticed.
+- **Inspecting the wrong host.** `www.class-register-cudp.onrender.com` fails its TLS
+  handshake and can never be crawled. Inspect the bare address,
+  `https://class-register-cudp.onrender.com/`, which is the canonical one.
+
+You can check the served file yourself at any time:
+
+```bash
+curl -sS https://class-register-cudp.onrender.com/robots.txt
+```
+
 ## Tests
 
 ```bash
@@ -221,7 +241,7 @@ server.py          HTTP server, auth, SQLite/Postgres storage, JSON API
 test_api.py        end-to-end API checks
 requirements.txt   psycopg (only used when DATABASE_URL is set)
 static/index.html  page shell
-static/style.css   Canva-style design system (light + curated dark fallback)
+static/style.css   Canva-style design system (light + dark palettes)
 static/app.js      single-page front-end (vanilla JS, no build step)
 attendance.db      your data (SQLite)
 ```

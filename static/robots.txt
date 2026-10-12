@@ -1,6 +1,11 @@
-# Academic Ledger — https://class-register-cudp.onrender.com/
+# robots.txt — Academic Ledger
+#   https://class-register-cudp.onrender.com/
+#
+# Everything here is open to crawlers. The app is a single page at "/", and the
+# JSON API under /api/ is never linked from any page and already answers with
+# "X-Robots-Tag: noindex, nofollow", so there is nothing to disallow.
+
 User-agent: *
 Allow: /
-Disallow: /api/
 
 Sitemap: https://class-register-cudp.onrender.com/sitemap.xml

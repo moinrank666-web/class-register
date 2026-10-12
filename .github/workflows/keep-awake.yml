@@ -24,3 +24,18 @@ jobs:
             if [ "$code" != "200" ]; then fail=1; fi
           done
           exit $fail
+
+      - name: Confirm robots.txt still allows crawling
+        # A sleeping origin can be answered by a synthetic robots.txt that
+        # disallows the whole site; that is what Search Console reports as
+        # "blocked by robots.txt". Fail loudly if we ever see one.
+        run: |
+          body=$(curl -sS --max-time 60 \
+                  https://class-register-cudp.onrender.com/robots.txt || true)
+          printf '%s\n' "$body"
+          if printf '%s' "$body" | grep -Eiq '^[[:space:]]*disallow:[[:space:]]*/[[:space:]]*$'; then
+            echo "::error::robots.txt disallows the whole site"
+            exit 1
+          fi
+          printf '%s' "$body" | grep -qi 'Allow: /' \
+            || { echo "::error::robots.txt is missing 'Allow: /'"; exit 1; }
