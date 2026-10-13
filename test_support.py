@@ -68,6 +68,13 @@ class StubProvider(BaseHTTPRequestHandler):
                 "message": "The model `stub-model` does not exist or you do not have access to it.",
                 "type": "invalid_request_error", "code": "model_not_found"}}).encode()
             code = 404
+        elif self.mode == "model400":
+            # Same verdict, but a 400: some OpenAI-compatible providers answer an
+            # unknown model this way instead of 404 (Groq uses 404).
+            out = json.dumps({"error": {
+                "message": "The model `stub-model` does not exist or you do not have access to it.",
+                "type": "invalid_request_error", "code": "model_not_found"}}).encode()
+            code = 400
         elif self.mode == "plain404":
             # A 404 that is NOT about the model — e.g. a wrong SUPPORT_API_URL.
             out, code = b'{"error":"Not Found"}', 404
@@ -194,6 +201,11 @@ def main():
           "stub-model" in (data.get("error") or ""), data.get("error"))
     check("the provider's raw error body is not echoed to the browser",
           "invalid_request_error" not in (data.get("error") or ""), data.get("error"))
+
+    status, data = run_mode("model400")
+    check("the same rejection delivered as a 400 is named too",
+          status == 502 and data.get("code") == "model_not_found"
+          and data.get("model") == "stub-model", (status, data))
 
     status, data = run_mode("plain404")
     check("a 404 that is not about the model keeps the generic message",
