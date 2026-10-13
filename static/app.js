@@ -1580,6 +1580,9 @@ function openHelp() {
       const data = await res.json().catch(() => ({}));
       wait.remove();
       if (res.status === 429) { bubble('bot', T('help.busy')); }
+      // A provider that does not serve our model is a configuration problem the
+      // operator can fix, so name the model instead of hiding behind "try again".
+      else if (data.code === 'model_not_found') { bubble('bot', T('help.modelMissing', { model: data.model || '?' })); }
       else if (!res.ok) { bubble('bot', T('help.error')); }
       else if (data.configured === false) { bubble('bot', T('help.unconfigured')); }
       else {

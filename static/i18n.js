@@ -62,6 +62,7 @@ const STRINGS = {
     'help.q3': 'How do I mark attendance?',
     'help.q4': 'How do I export a report?',
     'help.error': 'Sorry — I could not reach the help service just now. Please try again in a moment.',
+    'help.modelMissing': 'The help assistant cannot answer because the model it is set to use — "{model}" — is not offered by its provider. An administrator can fix this by setting SUPPORT_MODEL to a model the provider still serves.',
     'help.offline': 'You appear to be offline. Reconnect and try again.',
     'help.busy': 'That is a lot of questions at once — give it a few seconds, then try again.',
     'help.unconfigured': 'The help assistant is not switched on for this deployment yet. In the meantime, the menu holds a keyboard cheat-sheet, and each screen explains itself at the top.',

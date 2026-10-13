@@ -62,6 +62,15 @@ class StubProvider(BaseHTTPRequestHandler):
 
         if self.mode == "http500":
             out, code = b'{"error":{"message":"stub upstream exploded"}}', 500
+        elif self.mode == "model404":
+            # What an OpenAI-compatible provider sends for a retired or unknown model.
+            out = json.dumps({"error": {
+                "message": "The model `stub-model` does not exist or you do not have access to it.",
+                "type": "invalid_request_error", "code": "model_not_found"}}).encode()
+            code = 404
+        elif self.mode == "plain404":
+            # A 404 that is NOT about the model — e.g. a wrong SUPPORT_API_URL.
+            out, code = b'{"error":"Not Found"}', 404
         elif self.mode == "empty":
             out, code = b'{"choices":[]}', 200
         else:
@@ -174,6 +183,22 @@ def main():
     status, data = run_mode("unreachable")
     check("an unreachable provider becomes our own 502",
           status == 502 and "reached" in json.dumps(data).lower(), (status, data))
+
+    print("\nhelp assistant -- a model the provider does not serve")
+    status, data = run_mode("model404")
+    check("a retired or unknown model is named as such, not reported as an outage",
+          status == 502 and data.get("code") == "model_not_found", (status, data))
+    check("the response says which model failed",
+          data.get("model") == "stub-model", data.get("model"))
+    check("the message names the model so an operator can act",
+          "stub-model" in (data.get("error") or ""), data.get("error"))
+    check("the provider's raw error body is not echoed to the browser",
+          "invalid_request_error" not in (data.get("error") or ""), data.get("error"))
+
+    status, data = run_mode("plain404")
+    check("a 404 that is not about the model keeps the generic message",
+          status == 502 and not data.get("code")
+          and "unavailable" in json.dumps(data).lower(), (status, data))
 
     failed = [label for label, ok, _ in results if not ok]
     print("\n%d/%d checks passed" % (len(results) - len(failed), len(results)))

@@ -202,6 +202,10 @@ def main():
     i18n = call("GET", "/i18n.js")
     check("i18n carries the new theme and help strings",
           isinstance(i18n, str) and "'theme.system'" in i18n and "'help.greeting'" in i18n)
+    check("app names the failing model instead of a generic error",
+          isinstance(appjs, str) and "model_not_found" in appjs and "help.modelMissing" in appjs)
+    check("i18n fills the model name into the message",
+          isinstance(i18n, str) and "'help.modelMissing'" in i18n and "{model}" in i18n)
 
     sup = call("POST", "/api/support",
                {"messages": [{"role": "user", "content": "How do I add a student?"}]})

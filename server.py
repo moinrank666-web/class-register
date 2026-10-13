@@ -175,6 +175,30 @@ def ask_support(messages):
         return ""
     return ((choices[0].get("message") or {}).get("content") or "").strip()
 
+
+# A provider that has never heard of our model answers with an error that names the
+# model, rather than an outage. The two deserve different messages: a retired model is
+# fixed by changing one environment variable, a provider outage is not. Collapsing both
+# into "unavailable" leaves the operator with nothing to act on.
+_MODEL_ERROR = re.compile(
+    r"model_not_found|model not found|unknown model|no such model|unsupported model|"
+    r"model is not supported|does not exist|doesn't exist|not exist|"
+    r"you do not have access to it",
+    re.I,
+)
+
+
+def provider_rejects_model(status, detail):
+    """True when the provider's own error blames the model, not the deployment."""
+    if status not in (400, 404):        # a 500 is an outage, a 401 a bad key
+        return False
+    text = detail or ""
+    if "model_not_found" in text.lower():
+        return True
+    # Only when it also says "model", so a plain "404 Not Found" from a misconfigured
+    # SUPPORT_API_URL keeps the generic message instead of blaming the model.
+    return bool(re.search(r"model", text, re.I) and _MODEL_ERROR.search(text))
+
 HTML_CSP = ("default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; "
             "img-src 'self' data: blob:; font-src 'self'; connect-src 'self'; "
             "object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'")
@@ -982,6 +1006,17 @@ class Handler(BaseHTTPRequestHandler):
                 except Exception:
                     pass
                 print(f"[support] provider HTTP {exc.code}: {detail}", file=sys.stderr)
+                if provider_rejects_model(exc.code, detail):
+                    # Body fields, not headers: the help desk switches on "code", and
+                    # the model name must reach the browser so it can be shown.
+                    self.send_json({
+                        "error": f'The help assistant is set to use the model "{SUPPORT_MODEL}", '
+                                 "which this deployment's provider does not offer. Set "
+                                 "SUPPORT_MODEL to a model the provider serves.",
+                        "code": "model_not_found",
+                        "model": SUPPORT_MODEL,
+                    }, 502)
+                    return
                 self.fail("The help assistant is unavailable right now.", 502)
                 return
             except (URLError, TimeoutError, OSError) as exc:
