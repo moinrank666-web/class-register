@@ -46,6 +46,7 @@ class StubProvider(BaseHTTPRequestHandler):
 
     mode = "ok"
     received = {}
+    calls = []          # every request, so a test can see what was tried and in what order
 
     def log_message(self, *a):
         pass
@@ -59,6 +60,8 @@ class StubProvider(BaseHTTPRequestHandler):
             self.received["payload"] = {}
         self.received["auth"] = self.headers.get("Authorization")
         self.received["path"] = self.path
+        self.calls.append({"model": (self.received["payload"] or {}).get("model"),
+                           "path": self.path})
 
         if self.mode == "http500":
             out, code = b'{"error":{"message":"stub upstream exploded"}}', 500
@@ -75,6 +78,20 @@ class StubProvider(BaseHTTPRequestHandler):
                 "message": "The model `stub-model` does not exist or you do not have access to it.",
                 "type": "invalid_request_error", "code": "model_not_found"}}).encode()
             code = 400
+        elif self.mode == "fallback":
+            # Serves every model except "stub-model", which stands in for one the
+            # provider has retired. The reply names the model, so a test can tell
+            # which one actually answered.
+            served = (self.received["payload"] or {}).get("model")
+            if served == "stub-model":
+                out = json.dumps({"error": {
+                    "message": "The model `stub-model` does not exist or you do not have access to it.",
+                    "type": "invalid_request_error", "code": "model_not_found"}}).encode()
+                code = 404
+            else:
+                out = json.dumps({"choices": [{"message": {
+                    "role": "assistant", "content": "Answered by " + str(served)}}]}).encode()
+                code = 200
         elif self.mode == "plain404":
             # A 404 that is NOT about the model — e.g. a wrong SUPPORT_API_URL.
             out, code = b'{"error":"Not Found"}', 404
@@ -94,12 +111,13 @@ class StubProvider(BaseHTTPRequestHandler):
 def start_stub(mode):
     StubProvider.mode = mode
     StubProvider.received = {}
+    StubProvider.calls = []
     httpd = ThreadingHTTPServer(("127.0.0.1", 0), StubProvider)
     threading.Thread(target=httpd.serve_forever, daemon=True).start()
     return httpd, httpd.server_address[1]
 
 
-def start_app(support_url):
+def start_app(support_url, extra_env=None):
     env = dict(os.environ)
     port = free_port()
     env["ATTENDANCE_HOST"] = "127.0.0.1"
@@ -107,6 +125,10 @@ def start_app(support_url):
     env["SUPPORT_API_KEY"] = "stub-key-12345"
     env["SUPPORT_MODEL"] = "stub-model"
     env["SUPPORT_API_URL"] = support_url
+    # The developer's own environment must not decide this: the shipped default
+    # applies unless a test asks for something else.
+    env.pop("SUPPORT_FALLBACK_MODEL", None)
+    env.update(extra_env or {})
     proc = subprocess.Popen([sys.executable, SERVER], cwd=HERE, env=env,
                             stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
     base = "http://127.0.0.1:%d" % port
@@ -131,14 +153,14 @@ def post(base, path, payload, timeout=40):
         return exc.code, json.loads(exc.read().decode() or "{}")
 
 
-def run_mode(mode, support_url_for=None):
+def run_mode(mode, support_url_for=None, extra_env=None):
     """Point the app at a stub (or a dead port) and return (status, body)."""
     httpd, port = start_stub(mode)
     url = "http://127.0.0.1:8097/v1/chat/completions" if mode == "unreachable" \
         else "http://127.0.0.1:%d/v1/chat/completions" % port
     if support_url_for:
         url = support_url_for(port)
-    proc, base = start_app(url)
+    proc, base = start_app(url, extra_env)
     try:
         if base is None:
             check("[%s] server started with a key configured" % mode, False)
@@ -211,6 +233,57 @@ def main():
     check("a 404 that is not about the model keeps the generic message",
           status == 502 and not data.get("code")
           and "unavailable" in json.dumps(data).lower(), (status, data))
+
+    print("\nhelp assistant -- a retired model falls back instead of failing")
+    status, data = run_mode("fallback", extra_env={"SUPPORT_FALLBACK_MODEL": "backup-model"})
+    check("a question is still answered when the configured model is retired",
+          status == 200 and data.get("reply") == "Answered by backup-model", (status, data))
+    check("the retired model is tried first, then the fallback",
+          [c["model"] for c in StubProvider.calls] == ["stub-model", "backup-model"],
+          StubProvider.calls)
+    check("the reply reports which model actually served it",
+          data.get("model") == "backup-model", data.get("model"))
+
+    # The default must be a real fallback, so assert it is used without naming it here.
+    status, data = run_mode("fallback")
+    check("the shipped default applies when no fallback is configured",
+          status == 200 and data.get("model") and data.get("model") != "stub-model",
+          (status, data))
+
+    # Two questions on one server: the second must not retry the dead model.
+    httpd, port = start_stub("fallback")
+    proc, base = start_app("http://127.0.0.1:%d/v1/chat/completions" % port,
+                           {"SUPPORT_FALLBACK_MODEL": "backup-model"})
+    try:
+        check("server started for the repeat-question check", base is not None)
+        first = post(base, "/api/support", {"messages": [{"role": "user", "content": "one"}]})
+        second = post(base, "/api/support", {"messages": [{"role": "user", "content": "two"}]})
+        check("both questions are answered",
+              first[0] == 200 and second[0] == 200, (first, second))
+        check("the second question skips the model the provider does not serve",
+              [c["model"] for c in StubProvider.calls]
+              == ["stub-model", "backup-model", "backup-model"], StubProvider.calls)
+    finally:
+        proc.terminate()
+        try:
+            proc.wait(timeout=10)
+        except Exception:
+            proc.kill()
+        httpd.shutdown()
+
+    status, data = run_mode("model404", extra_env={"SUPPORT_FALLBACK_MODEL": "backup-model"})
+    check("when the fallback is unknown too, the configured model is the one still named",
+          status == 502 and data.get("code") == "model_not_found"
+          and data.get("model") == "stub-model", (status, data))
+
+    status, data = run_mode("model404", extra_env={"SUPPORT_FALLBACK_MODEL": ""})
+    check("an empty SUPPORT_FALLBACK_MODEL disables the retry",
+          status == 502 and data.get("code") == "model_not_found"
+          and len(StubProvider.calls) == 1, (status, data, StubProvider.calls))
+
+    status, data = run_mode("model404", extra_env={"SUPPORT_FALLBACK_MODEL": "stub-model"})
+    check("a fallback identical to the configured model is not retried",
+          status == 502 and len(StubProvider.calls) == 1, (status, data, StubProvider.calls))
 
     failed = [label for label, ok, _ in results if not ok]
     print("\n%d/%d checks passed" % (len(results) - len(failed), len(results)))

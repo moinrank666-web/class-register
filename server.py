@@ -105,6 +105,14 @@ SUPPORT_API_URL = os.environ.get(
 # valid key alone would still have failed. Providers retire models on their own
 # schedule — if the assistant starts answering 502, check SUPPORT_MODEL first.
 SUPPORT_MODEL = os.environ.get("SUPPORT_MODEL", "openai/gpt-oss-120b").strip()
+# A provider can retire the model we are pointed at without warning, so a question
+# should not start failing until an operator edits a variable. If the provider says it
+# does not know SUPPORT_MODEL, one retry goes to this second model. Set it to "" to
+# disable the retry, or to another model if you use a provider that is not Groq.
+SUPPORT_FALLBACK_MODEL = os.environ.get("SUPPORT_FALLBACK_MODEL", "openai/gpt-oss-20b").strip()
+# Once the fallback has actually answered, later questions go straight to it instead of
+# paying for a doomed call to the retired model each time. Per-process, learned at run time.
+SUPPORT_MODEL_OVERRIDE = None
 SUPPORT_MAX_MESSAGES = 10          # most recent turns kept
 SUPPORT_MAX_CHARS = 2000           # per-message cap
 SUPPORT_TIMEOUT = 25               # seconds
@@ -155,10 +163,10 @@ def support_rate_check(ip: str) -> int:
         return 0
 
 
-def ask_support(messages):
+def ask_support(messages, model=None):
     """Forward the conversation to the configured endpoint; return the reply text."""
     payload = json.dumps({
-        "model": SUPPORT_MODEL,
+        "model": model or SUPPORT_MODEL,
         "messages": [{"role": "system", "content": SUPPORT_SYSTEM}] + messages,
         "temperature": 0.3,
         "max_tokens": 500,
@@ -186,6 +194,61 @@ _MODEL_ERROR = re.compile(
     r"you do not have access to it",
     re.I,
 )
+
+
+class ModelRejected(Exception):
+    """Every model we were willing to try is unknown to the provider.
+
+    Carried as its own error rather than the provider's HTTPError so the caller can
+    name the model an operator has to change, instead of reporting an outage that
+    nothing in the deployment can act on.
+    """
+
+    def __init__(self, model):
+        super().__init__(model)
+        self.model = model
+
+
+def _provider_detail(exc):
+    """The provider's own error body, as far as we can read it."""
+    try:
+        return exc.read().decode("utf-8", "replace")[:300]
+    except Exception:
+        return ""
+
+
+def ask_support_with_fallback(messages):
+    """Answer with the configured model, retrying once on the fallback model.
+
+    Returns (reply_text, model_that_answered). Raises ModelRejected when every model
+    we are willing to try is unknown to the provider, and otherwise lets the
+    provider's own error through, so the caller can still tell an outage from a bad
+    key. Only a model the provider does not serve earns the retry: retrying a 500 or
+    a 401 would spend the user's time to reach the same answer.
+    """
+    global SUPPORT_MODEL_OVERRIDE
+    primary = SUPPORT_MODEL_OVERRIDE or SUPPORT_MODEL
+    candidates = [primary]
+    if SUPPORT_FALLBACK_MODEL and SUPPORT_FALLBACK_MODEL != primary:
+        candidates.append(SUPPORT_FALLBACK_MODEL)
+
+    for model in candidates:
+        try:
+            reply = ask_support(messages, model)
+        except HTTPError as exc:
+            detail = _provider_detail(exc)
+            print(f"[support] provider HTTP {exc.code} using {model!r}: {detail}",
+                  file=sys.stderr)
+            if provider_rejects_model(exc.code, detail):
+                continue
+            raise
+        if model != primary:
+            SUPPORT_MODEL_OVERRIDE = model
+            print(f"[support] {primary!r} is not served by the provider; "
+                  f"answering with {model!r} from now on", file=sys.stderr)
+        return reply or "", model
+
+    raise ModelRejected(primary)
 
 
 def provider_rejects_model(status, detail):
@@ -998,25 +1061,20 @@ class Handler(BaseHTTPRequestHandler):
                           extra={"Retry-After": str(wait)})
                 return
             try:
-                reply = ask_support(clean)
-            except HTTPError as exc:
-                detail = ""
-                try:
-                    detail = exc.read().decode("utf-8", "replace")[:300]
-                except Exception:
-                    pass
-                print(f"[support] provider HTTP {exc.code}: {detail}", file=sys.stderr)
-                if provider_rejects_model(exc.code, detail):
-                    # Body fields, not headers: the help desk switches on "code", and
-                    # the model name must reach the browser so it can be shown.
-                    self.send_json({
-                        "error": f'The help assistant is set to use the model "{SUPPORT_MODEL}", '
-                                 "which this deployment's provider does not offer. Set "
-                                 "SUPPORT_MODEL to a model the provider serves.",
-                        "code": "model_not_found",
-                        "model": SUPPORT_MODEL,
-                    }, 502)
-                    return
+                reply, model_used = ask_support_with_fallback(clean)
+            except ModelRejected as exc:
+                # Body fields, not headers: the help desk switches on "code", and the
+                # model name must reach the browser so it can be shown. Name the
+                # *configured* model, since that is the one an operator has to change.
+                self.send_json({
+                    "error": f'The help assistant is set to use the model "{exc.model}", '
+                             "which this deployment's provider does not offer. Set "
+                             "SUPPORT_MODEL to a model the provider serves.",
+                    "code": "model_not_found",
+                    "model": exc.model,
+                }, 502)
+                return
+            except HTTPError:
                 self.fail("The help assistant is unavailable right now.", 502)
                 return
             except (URLError, TimeoutError, OSError) as exc:
@@ -1030,7 +1088,7 @@ class Handler(BaseHTTPRequestHandler):
             if not reply:
                 self.fail("The help assistant returned an empty answer.", 502)
                 return
-            self.send_json({"configured": True, "reply": reply})
+            self.send_json({"configured": True, "reply": reply, "model": model_used})
             return
 
         if method == "POST" and path == "/api/setup":

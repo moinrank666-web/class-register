@@ -160,6 +160,7 @@ by default**; switch it on with environment variables:
 | `SUPPORT_API_KEY` | Your provider key. Read server-side only — never sent to the browser. |
 | `SUPPORT_API_URL` | Endpoint URL. Defaults to Groq (`https://api.groq.com/openai/v1/chat/completions`). |
 | `SUPPORT_MODEL` | Model name. Defaults to `openai/gpt-oss-120b`. |
+| `SUPPORT_FALLBACK_MODEL` | Second model to try if the provider does not know `SUPPORT_MODEL`. Defaults to `openai/gpt-oss-20b`; set it to an empty value to turn the retry off. |
 
 Set these in the host's dashboard (on Render: *Environment*), never in the repo.
 
@@ -172,14 +173,27 @@ data or an access code.
 ### When the assistant stops answering
 
 Providers retire models on their own schedule, and a retired model fails with an
-error even when the key is perfectly good — so the app can only report a generic
-"unavailable" message. That is what happened here: **`llama-3.3-70b-versatile`, the
-original default, was shut down on 2026-08-16 and is now enterprise-only.** If the
-help desk worked once and then stopped, set `SUPPORT_MODEL` to a model your provider
-currently serves before hunting for a bug in the app. The current model list is
-always authoritative, e.g. <https://console.groq.com/docs/models>.
+error even when the key is perfectly good. That is what happened here:
+**`llama-3.3-70b-versatile`, the original default, was shut down on 2026-08-16 and is
+now enterprise-only.**
 
-Only `SUPPORT_API_URL` and `SUPPORT_MODEL` change between providers, so any
+The app defends against this twice. First, a model the provider does not serve is
+reported **by name** — the answer says which model to change, instead of blaming an
+outage nothing in the deployment can fix. Second, rather than failing until someone
+edits a variable, it retries the question once on `SUPPORT_FALLBACK_MODEL`; if that
+works it keeps using it for later questions, and logs the switch to the standard
+error stream. Only a model problem is retried — a 500 or a bad key is not, since a
+second attempt would reach the same answer.
+
+So if the help desk worked once and then stopped, the message now names the model.
+Point `SUPPORT_MODEL` at one your provider currently serves and the retry stops being
+needed. The provider's model list is always authoritative, e.g.
+<https://console.groq.com/docs/models>. If you use a provider that is not Groq, set
+`SUPPORT_FALLBACK_MODEL` to a model *it* serves, or to an empty value to disable the
+retry.
+
+Only `SUPPORT_API_URL`, `SUPPORT_MODEL` and `SUPPORT_FALLBACK_MODEL` change between
+providers, so any
 OpenAI-compatible service works. Providers that document a no-card free tier include
 Groq (default), Google Gemini
 (`https://generativelanguage.googleapis.com/v1beta/openai/chat/completions`) and
