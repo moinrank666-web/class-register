@@ -15,6 +15,12 @@ TEACHER_CODE = "teach-pass-2"
 OBSERVER_CODE = "watch-pass-3"
 FAILURES = []
 
+# Access codes are stored as PBKDF2-SHA256 hashes at 600,000 iterations — slow on
+# purpose, and /api/setup hashes three codes at once. That is 7s even on an idle
+# machine and more under load, so the transport must be patient: this is a limit on
+# how long the client waits, not an assertion about how fast the app should be.
+CALL_TIMEOUT = 90
+
 
 def call(method, path, body=None, token=None, expect=200):
     req = urllib.request.Request(BASE + path, method=method)
@@ -23,7 +29,7 @@ def call(method, path, body=None, token=None, expect=200):
         req.add_header("Authorization", "Bearer " + token)
     data = json.dumps(body).encode() if body is not None else None
     try:
-        with urllib.request.urlopen(req, data=data, timeout=10) as res:
+        with urllib.request.urlopen(req, data=data, timeout=CALL_TIMEOUT) as res:
             raw = res.read().decode("utf-8-sig" if path.startswith("/api/export") else "utf-8")
             status = res.status
             ctype = res.headers.get("Content-Type", "")

@@ -159,13 +159,31 @@ by default**; switch it on with environment variables:
 |---|---|
 | `SUPPORT_API_KEY` | Your provider key. Read server-side only — never sent to the browser. |
 | `SUPPORT_API_URL` | Endpoint URL. Defaults to Groq (`https://api.groq.com/openai/v1/chat/completions`). |
-| `SUPPORT_MODEL` | Model name. Defaults to `llama-3.3-70b-versatile`. |
+| `SUPPORT_MODEL` | Model name. Defaults to `openai/gpt-oss-120b`. |
+
+Set these in the host's dashboard (on Render: *Environment*), never in the repo.
 
 `GROQ_API_KEY` also works as a fallback for `SUPPORT_API_KEY`. With no key the help
 desk still opens and simply says it is not switched on yet, so the UI never breaks.
 Questions are capped at 20 per minute per IP address. Only the text you type is sent
 to the provider, alongside a short description of what the app does — never student
 data or an access code.
+
+### When the assistant stops answering
+
+Providers retire models on their own schedule, and a retired model fails with an
+error even when the key is perfectly good — so the app can only report a generic
+"unavailable" message. That is what happened here: **`llama-3.3-70b-versatile`, the
+original default, was shut down on 2026-08-16 and is now enterprise-only.** If the
+help desk worked once and then stopped, set `SUPPORT_MODEL` to a model your provider
+currently serves before hunting for a bug in the app. The current model list is
+always authoritative, e.g. <https://console.groq.com/docs/models>.
+
+Only `SUPPORT_API_URL` and `SUPPORT_MODEL` change between providers, so any
+OpenAI-compatible service works. Providers that document a no-card free tier include
+Groq (default), Google Gemini
+(`https://generativelanguage.googleapis.com/v1beta/openai/chat/completions`) and
+Mistral (`https://api.mistral.ai/v1/chat/completions`).
 
 ## Get found on Google
 

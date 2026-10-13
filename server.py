@@ -100,7 +100,11 @@ RATE_LOCKOUT_SECONDS = 600
 SUPPORT_API_KEY = (os.environ.get("SUPPORT_API_KEY") or os.environ.get("GROQ_API_KEY") or "").strip()
 SUPPORT_API_URL = os.environ.get(
     "SUPPORT_API_URL", "https://api.groq.com/openai/v1/chat/completions").strip()
-SUPPORT_MODEL = os.environ.get("SUPPORT_MODEL", "llama-3.3-70b-versatile").strip()
+# The model a provider serves is not ours to keep: llama-3.3-70b-versatile, the
+# original default, was shut down on 2026-08-16 and is now enterprise-only, so a
+# valid key alone would still have failed. Providers retire models on their own
+# schedule — if the assistant starts answering 502, check SUPPORT_MODEL first.
+SUPPORT_MODEL = os.environ.get("SUPPORT_MODEL", "openai/gpt-oss-120b").strip()
 SUPPORT_MAX_MESSAGES = 10          # most recent turns kept
 SUPPORT_MAX_CHARS = 2000           # per-message cap
 SUPPORT_TIMEOUT = 25               # seconds
