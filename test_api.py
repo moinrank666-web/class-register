@@ -206,6 +206,11 @@ def main():
           isinstance(appjs, str) and "model_not_found" in appjs and "help.modelMissing" in appjs)
     check("i18n fills the model name into the message",
           isinstance(i18n, str) and "'help.modelMissing'" in i18n and "{model}" in i18n)
+    check("app ships the assistant diagnostics panel",
+          isinstance(appjs, str) and "openDiagModal" in appjs
+          and "/api/support/diagnostics" in appjs)
+    check("i18n carries the diagnostics strings",
+          isinstance(i18n, str) and "'diag.title'" in i18n and "'diag.menu'" in i18n)
 
     sup = call("POST", "/api/support",
                {"messages": [{"role": "user", "content": "How do I add a student?"}]})
@@ -239,6 +244,24 @@ def main():
     check("teacher login", bool(T))
     check("observer login", bool(O), str(obs))
     check("no token rejected", "error" in call("GET", "/api/students", expect=401))
+
+    print("help assistant diagnostics")
+    check("diagnostics needs a session",
+          "error" in call("GET", "/api/support/diagnostics", expect=401))
+    check("a teacher may not read diagnostics",
+          "error" in call("GET", "/api/support/diagnostics", token=T, expect=403))
+    check("an observer may not read diagnostics",
+          "error" in call("GET", "/api/support/diagnostics", token=O, expect=403))
+    diag = call("GET", "/api/support/diagnostics", token=A)
+    check("an admin reads diagnostics", diag.get("enabled") is False, str(diag))
+    check("diagnostics names the configured model",
+          bool(diag.get("configured_model")), str(diag))
+    check("diagnostics reports an unprobed provider as unknown, not unreachable",
+          diag.get("provider_reachable") is None and diag.get("model_available") is None,
+          str(diag))
+    check("diagnostics never echoes the key",
+          "api_key" not in json.dumps(diag).lower()
+          and "bearer" not in json.dumps(diag).lower(), str(diag))
 
     print("roles & permissions")
     # teacher may now add students (new requirement); removal stays admin-only
