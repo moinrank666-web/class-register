@@ -1,0 +1,87 @@
+name: Deploy to Render
+
+# Every push to main asks Render to build and release the new commit. Render's
+# own auto-deploy is a dashboard setting that can silently be off (and was — a
+# push sat undeployed for ten minutes); a Deploy Hook is a plain URL the pipeline
+# can call, so the step that ships the code lives in the repo with the code.
+#
+# Setup, once:
+#   1. Render dashboard → the class-register service → Settings → Deploy Hook.
+#      Copy the URL (it ends in a long random token).
+#   2. GitHub → repo → Settings → Secrets and variables → Actions → New secret
+#      named RENDER_DEPLOY_HOOK_URL, pasted as the value.
+# The hook URL is a secret: anyone who has it can trigger (and thus pay for) a
+# deploy, so it is never written here, never echoed, and GitHub masks it in logs.
+#
+# Without the secret the workflow still succeeds with a warning rather than a red
+# X — a fork, or a repo where nobody set it up yet, should not look broken.
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:        # lets you deploy without an empty commit
+
+# Only one deploy at a time, and a newer push supersedes a queued one: two
+# simultaneous builds of the same service would race to be the live version.
+concurrency:
+  group: render-deploy
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    env:
+      SITE: https://class-register-cudp.onrender.com
+    steps:
+      - name: Check out the pushed commit
+        uses: actions/checkout@v4
+
+      - name: Trigger the Render deploy hook
+        id: hook
+        env:
+          HOOK: ${{ secrets.RENDER_DEPLOY_HOOK_URL }}
+        run: |
+          set -u
+          if [ -z "${HOOK:-}" ]; then
+            echo "::warning::RENDER_DEPLOY_HOOK_URL is not set — skipping the deploy. Add it under Settings → Secrets and variables → Actions."
+            echo "triggered=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          # -f fails on a 4xx/5xx so a revoked or wrong hook turns the run red
+          # instead of pretending it deployed. The URL is never printed.
+          code=$(curl -sS -o /tmp/hook-body -w '%{http_code}' \
+                  --retry 3 --retry-delay 3 --max-time 60 \
+                  -X POST "$HOOK" 2>/dev/null) || code=000
+          echo "deploy hook answered $code"
+          cat /tmp/hook-body 2>/dev/null || true
+          case "$code" in
+            2*) echo "triggered=true" >> "$GITHUB_OUTPUT" ;;
+            *)  echo "::error::Render deploy hook failed with HTTP $code"
+                echo "triggered=false" >> "$GITHUB_OUTPUT"
+                exit 1 ;;
+          esac
+
+      - name: Verify the new build is live
+        # Render builds take a few minutes, and the site answers 200 the whole
+        # time with the OLD code — so a plain /healthz check would pass before
+        # anything shipped. /api/auth/config is a route only the new build has:
+        # it answers 401 on the previous version and a JSON body with an
+        # "enabled" key on this one. That turns "triggered" into "deployed".
+        if: steps.hook.outputs.triggered == 'true'
+        run: |
+          set -u
+          deadline=$((SECONDS + 600))       # up to ten minutes
+          while [ $SECONDS -lt $deadline ]; do
+            body=$(curl -sS --max-time 30 "$SITE/api/auth/config" 2>/dev/null) || body=''
+            if printf '%s' "$body" | grep -q '"enabled"'; then
+              echo "new build is live: $body"
+              exit 0
+            fi
+            echo "waiting for Render to finish building… (got: ${body:-no response})"
+            sleep 20
+          done
+          echo "::error::$SITE still serves the previous build after 10 minutes. Check the Render deploy logs."
+          exit 1
