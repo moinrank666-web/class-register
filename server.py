@@ -334,7 +334,7 @@ HTML_CSP = ("default-src 'self'; "
             # and its Google-hosted assets. Only when sign-in is configured —
             # otherwise the page stays locked to 'self'.
             "script-src 'self'" + (" https://accounts.google.com" if GOOGLE_CLIENT_ID else "") + "; "
-            "style-src 'self' 'unsafe-inline'; "
+            "style-src 'self' 'unsafe-inline'" + (" https://accounts.google.com" if GOOGLE_CLIENT_ID else "") + "; "
             "img-src 'self' data: blob:" + (" https://*.google.com https://*.gstatic.com" if GOOGLE_CLIENT_ID else "") + "; "
             "font-src 'self'; "
             "connect-src 'self'" + (" https://accounts.google.com" if GOOGLE_CLIENT_ID else "") + "; "
