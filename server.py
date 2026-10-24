@@ -166,6 +166,85 @@ SUPPORT_SYSTEM = (
 )
 
 
+# --------------------------------------------------------------------------
+# Built-in answer guide. Used when no SUPPORT_API_KEY is set so the assistant
+# still helps instead of going silent. Deterministic and offline: it matches
+# the question against the app's real features and answers in one short
+# paragraph. No key, no network, no tokens.
+# --------------------------------------------------------------------------
+SUPPORT_TOPICS = [
+    (("add student", "new student", "enrol", "enroll", "roster", "remove student",
+      "delete student", "edit student", "student"),
+     "Open Students from the sidebar. Admins and teachers can add a name with a grade "
+     "and a 3-digit roll number; a grade and roll number together must be unique. "
+     "Use the row menu to edit or remove a student."),
+    (("attendance", "present", "absent", "late", "mark", "roll call", "register"),
+     "Open Attendance, pick the date, then set each student present, absent or late and "
+     "save. Per-student and whole-class totals appear under the list, and Reports turns "
+     "them into a trend over the month."),
+    (("score", "scores", "test", "marks", "grade", "grading", "percentage", "rank"),
+     "Open Test Scores and create a test with its maximum score and month, then enter "
+     "each student's marks. The app works out totals, percentages, letter grades and "
+     "class ranks for you — you never type those in."),
+    (("report", "csv", "export", "download", "print", "chart"),
+     "Open Reports and choose the month. You get attendance and score summaries plus a "
+     "CSV download you can open in Excel or Sheets. The trend chart shows attendance "
+     "across the month."),
+    (("code", "password", "login", "sign in", "signin", "forgot", "reset", "change code",
+      "access"),
+     "Codes are stored as salted hashes, so nobody — including an admin — can read one "
+     "back. A lost code has to be replaced. Only an admin can set codes, from the Codes "
+     "screen in the menu. I can't see or guess yours."),
+    (("role", "roles", "admin", "teacher", "observer", "permission", "who can"),
+     "There are three roles. An admin manages students, attendance, scores and codes and "
+     "sees the activity log. A teacher adds students and enters scores and attendance. "
+     "An observer, if you set one, is read-only."),
+    (("google", "sign in with google", "gmail", "oauth", "sso"),
+     "Google sign-in is optional and off until the deployment is configured for it. When "
+     "it is on, the sign-in screen shows a Continue with Google button beside the code "
+     "box. If that button errors, the deployment's Google origin or client ID still needs "
+     "fixing — that is a server setting, not something you can change in the app."),
+    (("language", "translate", "theme", "dark", "light", "appearance", "colour", "color"),
+     "Open the menu to switch between light, dark and system themes, and to change the "
+     "language — the app ships in ten. Both choices stick to the device you set them on."),
+    (("install", "offline", "pwa", "home screen", "app"),
+     "The app installs like a normal app: use your browser's Install option, or Add to "
+     "Home Screen on a phone. Once installed it opens full screen and keeps working "
+     "offline for pages you have already visited."),
+    (("activity", "log", "audit", "history"),
+     "The Activity screen lists what was changed and when. It is admin-only, which keeps "
+     "the audit trail out of reach of teachers and observers."),
+    (("backup", "database", "data", "lose", "lost", "safe", "storage"),
+     "Records live in the deployment's database. On hosts with a temporary filesystem, "
+     "point DATABASE_URL at a real database or your data can disappear on redeploy — the "
+     "operator sets that, not the app."),
+]
+
+SUPPORT_GUIDE_OVERVIEW = (
+    "I can help with Academic Ledger: adding students, marking attendance, test scores and "
+    "ranks, monthly reports and CSV downloads, roles, access codes, Google sign-in, themes "
+    "and languages, and installing the app. Ask about any of those and I'll point you to "
+    "the right screen."
+)
+
+
+def builtin_support_reply(messages) -> str:
+    """Answer from the built-in guide. Deterministic, offline, no provider needed.
+
+    The most recent user turns carry the topic, so later messages can be short ("what
+    about removing one?"). Each topic scores by how many of its phrases appear; the best
+    scoring topic wins, and no match falls back to the capability overview.
+    """
+    recent = [m.get("content", "") for m in messages if m.get("role") == "user"]
+    text = " \n".join(recent[-3:]).lower()
+    best, best_score = None, 0
+    for phrases, answer in SUPPORT_TOPICS:
+        score = sum(1 for p in phrases if p in text)
+        if score > best_score:
+            best, best_score = answer, score
+    return best or SUPPORT_GUIDE_OVERVIEW
+
+
 def support_rate_check(ip: str) -> int:
     """Seconds this IP must wait before asking again (0 = allowed)."""
     now = time.time()
@@ -1304,7 +1383,12 @@ class Handler(BaseHTTPRequestHandler):
                 self.fail("A user message is required.", 400)
                 return
             if not SUPPORT_API_KEY:
-                self.send_json({"configured": False, "reply": None})
+                # No model key: answer from the built-in guide rather than leaving the
+                # assistant silent. Same endpoint and response shape, so the browser
+                # needs no special case; "mode" tells an operator where it came from.
+                self.send_json({"configured": True, "mode": "builtin",
+                                "reply": builtin_support_reply(clean),
+                                "model": "built-in"})
                 return
             wait = support_rate_check(self.client_ip())
             if wait:

@@ -214,8 +214,9 @@ def main():
 
     sup = call("POST", "/api/support",
                {"messages": [{"role": "user", "content": "How do I add a student?"}]})
-    check("support endpoint answers (unconfigured without a key)",
-          sup.get("configured") is False and sup.get("reply") is None, str(sup))
+    check("support answers from the built-in guide without a key",
+          sup.get("configured") is True and sup.get("mode") == "builtin"
+          and isinstance(sup.get("reply"), str) and len(sup["reply"]) > 40, str(sup))
     bad = call("POST", "/api/support", {}, expect=400)
     check("support rejects a missing message list", "error" in bad)
     nonuser = call("POST", "/api/support",

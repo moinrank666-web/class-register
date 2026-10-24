@@ -152,8 +152,11 @@ and a *Need a hand?* link under the sign-in form. It opens a small help desk tha
 answers questions about the register (signing in, students, attendance, scores,
 reports, codes) and remembers the last few turns of the chat.
 
-The answers come from any OpenAI-compatible chat-completions endpoint. It is **off
-by default**; switch it on with environment variables:
+It answers with no setup at all: with no key configured the assistant uses a
+**built-in guide** that matches your question against the app's real features and
+answers offline — no provider, no key, no cost. Set the variables below to have it
+answer with a language model instead, which is what you want for questions the
+guide's fixed topics do not cover.
 
 | Variable | Purpose |
 |---|---|
@@ -164,9 +167,13 @@ by default**; switch it on with environment variables:
 
 Set these in the host's dashboard (on Render: *Environment*), never in the repo.
 
-`GROQ_API_KEY` also works as a fallback for `SUPPORT_API_KEY`. With no key the help
-desk still opens and simply says it is not switched on yet, so the UI never breaks.
-Questions are capped at 20 per minute per IP address. Only the text you type is sent
+`GROQ_API_KEY` also works as a fallback for `SUPPORT_API_KEY`. The built-in guide
+covers students, attendance, test scores and ranks, reports and CSV, codes and
+sign-in, roles, Google sign-in, themes and languages, installing, the activity log
+and data storage; anything else it answers with a short list of what it can help
+with. Replies carry `"mode": "builtin"` so an operator can tell which path answered.
+Model questions are capped at 20 per minute per IP address (the built-in guide is
+local and free, so it is not capped). Only the text you type is sent
 to the provider, alongside a short description of what the app does — never student
 data or an access code.
 
