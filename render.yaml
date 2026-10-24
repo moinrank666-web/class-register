@@ -13,6 +13,17 @@ services:
         fromDatabase:
           name: class-register-db
           property: connectionString
+      # Google sign-in is optional. Leave these unset and the app runs on
+      # access codes exactly as before. Set them in the Render dashboard:
+      #   GOOGLE_CLIENT_ID    the OAuth web client id from Google Cloud
+      #   GOOGLE_ADMIN_EMAILS  comma-separated Gmails that become admins
+      #   GOOGLE_TEACHER_EMAILS comma-separated Gmails that become teachers
+      - key: GOOGLE_CLIENT_ID
+        sync: false
+      - key: GOOGLE_ADMIN_EMAILS
+        sync: false
+      - key: GOOGLE_TEACHER_EMAILS
+        sync: false
 
 databases:
   - name: class-register-db
