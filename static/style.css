@@ -404,6 +404,22 @@ td.num,th.num{text-align:right;font-variant-numeric:tabular-nums}
   border-radius:12px;font-size:13px;margin-bottom:16px;line-height:1.5}
 .alert{background:#FFE9EE;border:1.5px solid #FFC9D3;color:#C9304C;padding:11px 14px;
   border-radius:12px;font-size:13.4px;margin-bottom:16px}
+.hidden{display:none !important}
+/* Google sign-in block on the login card */
+.google-box{margin-top:6px}
+.google-or{display:flex;align-items:center;gap:12px;color:#948DB8;
+  font-size:12px;text-transform:uppercase;letter-spacing:.6px;margin:18px 0 14px}
+.google-or::before,.google-or::after{content:"";flex:1;height:1px;background:var(--line,#E7E3F5)}
+#google-btn{display:flex;justify-content:center}
+html:is(.forced-dark,[data-theme="dark"]) .google-or{color:#8B84B8}
+html:is(.forced-dark,[data-theme="dark"]) .google-or::before,
+html:is(.forced-dark,[data-theme="dark"]) .google-or::after{background:#332C55}
+.diag-row{display:flex;justify-content:space-between;align-items:baseline;gap:14px;
+  padding:9px 0;border-bottom:1px solid var(--line);font-size:13.6px}
+.diag-row b{font-weight:600;text-align:right;word-break:break-word}
+.diag-row b.ok{color:#1E9E63}
+.diag-row b.bad{color:#C9304C}
+.diag-hint{margin-top:14px;font-size:12.4px;line-height:1.5}
 .brand-mini{display:flex;align-items:center;gap:11px;margin-bottom:20px}
 .brand-mini .m{width:44px;height:44px;border-radius:14px;background:var(--grad);display:grid;
   place-items:center;font-size:22px;color:#fff;box-shadow:0 8px 18px rgba(124,92,252,.35)}

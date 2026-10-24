@@ -29,7 +29,7 @@ import traceback
 from contextlib import contextmanager
 from datetime import datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from urllib.parse import urlparse, parse_qs
+from urllib.parse import urlparse, parse_qs, quote
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
@@ -86,6 +86,23 @@ SESSION_TTL_SECONDS = 8 * 60 * 60          # absolute lifetime: 8 hours
 SESSION_IDLE_SECONDS = 2 * 60 * 60         # logged out after 2 h of inactivity
 PBKDF2_ITERATIONS = 600_000                # OWASP-recommended PBKDF2-SHA256 work factor
 
+# Google sign-in (optional). When GOOGLE_CLIENT_ID is set, people can sign in
+# with a Gmail account instead of an access code. The token is verified
+# server-side against Google; only addresses listed in GOOGLE_ADMIN_EMAILS
+# (bootstrap admins) or already stored in the `users` table are let in.
+# Without a client ID the app behaves exactly as before — codes only.
+GOOGLE_CLIENT_ID = os.environ.get("GOOGLE_CLIENT_ID", "").strip()
+
+
+def _email_set(name):
+    return {e.strip().lower() for e in os.environ.get(name, "").split(",") if e.strip()}
+
+
+GOOGLE_ADMIN_EMAILS = _email_set("GOOGLE_ADMIN_EMAILS")   # become admins on first sign-in
+GOOGLE_TEACHER_EMAILS = _email_set("GOOGLE_TEACHER_EMAILS")  # become teachers on first sign-in
+GOOGLE_TOKENINFO_URL = os.environ.get(
+    "GOOGLE_TOKENINFO_URL", "https://oauth2.googleapis.com/tokeninfo").strip()
+
 # Brute-force protection for the code endpoints (in-memory, per client IP)
 RATE_WINDOW_SECONDS = 60
 RATE_MAX_FAILURES = 8
@@ -113,6 +130,10 @@ SUPPORT_FALLBACK_MODEL = os.environ.get("SUPPORT_FALLBACK_MODEL", "openai/gpt-os
 # Once the fallback has actually answered, later questions go straight to it instead of
 # paying for a doomed call to the retired model each time. Per-process, learned at run time.
 SUPPORT_MODEL_OVERRIDE = None
+# The last thing that actually went wrong, so an admin can see it in the app rather
+# than needing the host's logs. In-memory and per-process on purpose: it describes this
+# deployment's recent behaviour, not a durable audit trail, and it holds no secrets.
+SUPPORT_LAST_ERROR = None
 SUPPORT_MAX_MESSAGES = 10          # most recent turns kept
 SUPPORT_MAX_CHARS = 2000           # per-message cap
 SUPPORT_TIMEOUT = 25               # seconds
@@ -217,6 +238,51 @@ def _provider_detail(exc):
         return ""
 
 
+def record_support_error(kind, detail=""):
+    """Remember the most recent provider failure for the admin diagnostics panel."""
+    global SUPPORT_LAST_ERROR
+    SUPPORT_LAST_ERROR = {
+        "kind": str(kind)[:80],
+        "detail": str(detail or "")[:300],
+        "at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+    }
+
+
+MODELS_SUFFIX = "/chat/completions"
+
+
+def provider_model_list(timeout=8):
+    """The provider's own model list, or (None, reason) if we could not read it.
+
+    Nearly every OpenAI-compatible provider serves GET .../models beside
+    POST .../chat/completions. That call spends no tokens, which makes it a cheap way
+    to answer both "is the provider reachable?" and "does it still serve our model?"
+    — the two questions behind a help desk that has stopped answering.
+    """
+    if not SUPPORT_API_URL.endswith(MODELS_SUFFIX):
+        return None, ("SUPPORT_API_URL does not end in /chat/completions, so there is "
+                      "no models endpoint to ask.")
+    url = SUPPORT_API_URL[:-len(MODELS_SUFFIX)] + "/models"
+    req = Request(url, method="GET", headers={
+        "Authorization": "Bearer " + SUPPORT_API_KEY,
+        "User-Agent": "AcademicLedger/1.0",
+    })
+    try:
+        with urlopen(req, timeout=timeout) as res:
+            body = json.loads(res.read().decode("utf-8", "replace"))
+    except HTTPError as exc:
+        return None, f"The provider answered HTTP {exc.code} for its model list."
+    except (URLError, TimeoutError, OSError):
+        return None, "The provider could not be reached for its model list."
+    except Exception as exc:
+        return None, f"The provider's model list could not be read ({exc.__class__.__name__})."
+    ids = []
+    for entry in (body.get("data") or []):
+        if isinstance(entry, dict) and entry.get("id"):
+            ids.append(str(entry["id"]))
+    return ids, None
+
+
 def ask_support_with_fallback(messages):
     """Answer with the configured model, retrying once on the fallback model.
 
@@ -239,6 +305,7 @@ def ask_support_with_fallback(messages):
             detail = _provider_detail(exc)
             print(f"[support] provider HTTP {exc.code} using {model!r}: {detail}",
                   file=sys.stderr)
+            record_support_error(f"provider HTTP {exc.code}", detail)
             if provider_rejects_model(exc.code, detail):
                 continue
             raise
@@ -262,8 +329,16 @@ def provider_rejects_model(status, detail):
     # SUPPORT_API_URL keeps the generic message instead of blaming the model.
     return bool(re.search(r"model", text, re.I) and _MODEL_ERROR.search(text))
 
-HTML_CSP = ("default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; "
-            "img-src 'self' data: blob:; font-src 'self'; connect-src 'self'; "
+HTML_CSP = ("default-src 'self'; "
+            # Google Identity Services: its script, the account chooser iframe,
+            # and its Google-hosted assets. Only when sign-in is configured —
+            # otherwise the page stays locked to 'self'.
+            "script-src 'self'" + (" https://accounts.google.com" if GOOGLE_CLIENT_ID else "") + "; "
+            "style-src 'self' 'unsafe-inline'; "
+            "img-src 'self' data: blob:" + (" https://*.google.com https://*.gstatic.com" if GOOGLE_CLIENT_ID else "") + "; "
+            "font-src 'self'; "
+            "connect-src 'self'" + (" https://accounts.google.com" if GOOGLE_CLIENT_ID else "") + "; "
+            "frame-src 'self' https://accounts.google.com; "
             "object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'")
 API_CSP = "default-src 'none'; frame-ancestors 'none'"
 MONTH_RE = re.compile(r"^\d{4}-(0[1-9]|1[0-2])$")
@@ -299,11 +374,17 @@ CREATE TABLE IF NOT EXISTS settings (
     key   TEXT PRIMARY KEY,
     value TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS users (
+    email      TEXT PRIMARY KEY,
+    role       TEXT NOT NULL CHECK (role IN ('admin','teacher')),
+    created_at TEXT NOT NULL
+);
 CREATE TABLE IF NOT EXISTS students (
     id         INTEGER PRIMARY KEY AUTOINCREMENT,
     name       TEXT NOT NULL,
     grade      TEXT NOT NULL,
     roll3      TEXT NOT NULL,
+    owner_email TEXT,
     created_at TEXT NOT NULL,
     UNIQUE (grade, roll3)
 );
@@ -320,6 +401,7 @@ CREATE TABLE IF NOT EXISTS tests (
     month      TEXT NOT NULL,
     max_score  REAL NOT NULL,
     test_date  TEXT,
+    owner_email TEXT,
     created_at TEXT NOT NULL
 );
 CREATE TABLE IF NOT EXISTS scores (
@@ -345,11 +427,17 @@ CREATE TABLE IF NOT EXISTS settings (
     key   TEXT PRIMARY KEY,
     value TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS users (
+    email      TEXT PRIMARY KEY,
+    role       TEXT NOT NULL CHECK (role IN ('admin','teacher')),
+    created_at TEXT NOT NULL
+);
 CREATE TABLE IF NOT EXISTS students (
     id         BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
     name       TEXT NOT NULL,
     grade      TEXT NOT NULL,
     roll3      TEXT NOT NULL,
+    owner_email TEXT,
     created_at TEXT NOT NULL,
     UNIQUE (grade, roll3)
 );
@@ -366,6 +454,7 @@ CREATE TABLE IF NOT EXISTS tests (
     month      TEXT NOT NULL,
     max_score  DOUBLE PRECISION NOT NULL,
     test_date  TEXT,
+    owner_email TEXT,
     created_at TEXT NOT NULL
 );
 CREATE TABLE IF NOT EXISTS scores (
@@ -434,6 +523,29 @@ def db_conn():
         conn.close()
 
 
+def _migrate(c):
+    """Add columns introduced after a database was first created.
+
+    `CREATE TABLE IF NOT EXISTS` never alters an existing table, so a
+    database made before per-user ownership existed would be missing the
+    `owner_email` columns. Adding them here (guarded, so re-running is a
+    no-op) upgrades an old file in place instead of failing every query.
+    """
+    def has_col(table, col):
+        if USE_PG:
+            row = c.execute(
+                "SELECT COUNT(*) AS n FROM information_schema.columns "
+                "WHERE table_name = ? AND column_name = ?", (table, col)).fetchone()
+        else:
+            row = c.execute(f"PRAGMA table_info({table})").fetchall()
+            return any((r["name"] if isinstance(r, dict) else r[1]) == col for r in row)
+        return (row["n"] if isinstance(row, dict) else row[0]) > 0
+
+    for table in ("students", "tests"):
+        if not has_col(table, "owner_email"):
+            c.execute(f"ALTER TABLE {table} ADD COLUMN owner_email TEXT")
+
+
 def init_db():
     if USE_PG:
         with db_conn() as c:
@@ -441,9 +553,11 @@ def init_db():
                 stmt = stmt.strip()
                 if stmt:
                     c.execute(stmt)
+            _migrate(c)
         return
     with db_conn() as c:
         c.executescript(SCHEMA)
+        _migrate(c)
 
 
 def grade_num(col="grade"):
@@ -553,14 +667,15 @@ def setup_required():
         return get_setting(c, "admin_hash") is None
 
 
-def create_session(role):
+def create_session(role, email=None):
     token = secrets.token_urlsafe(32)
     now = time.time()
     with SESSIONS_LOCK:
         if len(SESSIONS) >= 256:  # hard cap so session memory cannot be exhausted
             oldest = min(SESSIONS, key=lambda t: SESSIONS[t]["last"])
             SESSIONS.pop(oldest, None)
-        SESSIONS[token] = {"role": role, "exp": now + SESSION_TTL_SECONDS, "last": now}
+        SESSIONS[token] = {"role": role, "email": email,
+                           "exp": now + SESSION_TTL_SECONDS, "last": now}
     return token
 
 
@@ -569,7 +684,11 @@ def drop_session(token):
         SESSIONS.pop(token, None)
 
 
-def session_role(token):
+def session_info(token):
+    """Return the live session dict {role, email, ...} or None.
+
+    Refreshes the idle timer as a side effect, exactly as `session_role` did.
+    """
     if not token:
         return None
     now = time.time()
@@ -581,7 +700,18 @@ def session_role(token):
             SESSIONS.pop(token, None)
             return None
         info["last"] = now
-        return info["role"]
+        return info
+
+
+def session_role(token):
+    info = session_info(token)
+    return info["role"] if info else None
+
+
+def session_email(token):
+    """The Gmail address this session signed in with, or None (code sign-in)."""
+    info = session_info(token)
+    return info.get("email") if info else None
 
 
 def drop_sessions_except(token):
@@ -590,6 +720,78 @@ def drop_sessions_except(token):
         for t in list(SESSIONS):
             if t != token:
                 SESSIONS.pop(t, None)
+
+
+# --------------------------------------------------------------------------
+# Google sign-in
+# --------------------------------------------------------------------------
+def google_enabled():
+    return bool(GOOGLE_CLIENT_ID)
+
+
+def verify_google_token(credential):
+    """Validate a Google ID token *server-side* and return {email, role}.
+
+    The browser only proves who it is by handing us a signed token; we never
+    trust the email it claims. Instead we ask Google to vouch for the token,
+    then check it ourselves:
+
+      * the signature and expiry are Google's job (tokeninfo verifies them),
+      * `aud` must be OUR client id — otherwise the token was minted for a
+        different app and is not a login to this one,
+      * `iss` must be Google's account issuer,
+      * `email_verified` must be true — an unverified address is not identity,
+      * the address must be one we allow (a bootstrap admin, or a row the
+        admin has already added to `users`).
+
+    Raises ValueError with a user-facing message on any failure.
+    """
+    if not google_enabled():
+        raise ValueError("Google sign-in is not configured on this server.")
+    if not credential or not isinstance(credential, str) or len(credential) > 8192:
+        raise ValueError("Missing Google credential.")
+
+    url = f"{GOOGLE_TOKENINFO_URL}?id_token={quote(credential)}"
+    try:
+        with urlopen(Request(url, headers={"User-Agent": "AcademicLedger/1.0"}), timeout=8) as resp:
+            claims = json.loads(resp.read().decode("utf-8"))
+    except HTTPError as exc:
+        # Google answers 400 for a bad/expired/forged token.
+        raise ValueError("Google could not verify that sign-in. Please try again.") from exc
+    except (URLError, TimeoutError, ValueError, OSError) as exc:
+        raise ValueError("Could not reach Google to verify sign-in.") from exc
+
+    if claims.get("aud") != GOOGLE_CLIENT_ID:
+        raise ValueError("That Google sign-in belongs to a different app.")
+    if claims.get("iss") not in ("accounts.google.com", "https://accounts.google.com"):
+        raise ValueError("Unrecognized token issuer.")
+    if str(claims.get("email_verified", "")).lower() != "true":
+        raise ValueError("That Google account's email is not verified.")
+
+    email = (claims.get("email") or "").strip().lower()
+    if not email or "@" not in email:
+        raise ValueError("That Google account has no email address.")
+
+    # Role: already a known user wins; otherwise bootstrap from the env lists.
+    with db_conn() as c:
+        row = c.execute("SELECT role FROM users WHERE email = ?", (email,)).fetchone()
+        if row:
+            role = row["role"]
+        elif email in GOOGLE_ADMIN_EMAILS:
+            role = "admin"
+            c.execute("INSERT INTO users(email, role, created_at) VALUES(?,?,?) "
+                      "ON CONFLICT(email) DO NOTHING",
+                      (email, role, datetime.now().isoformat(timespec="seconds")))
+        elif email in GOOGLE_TEACHER_EMAILS:
+            role = "teacher"
+            c.execute("INSERT INTO users(email, role, created_at) VALUES(?,?,?) "
+                      "ON CONFLICT(email) DO NOTHING",
+                      (email, role, datetime.now().isoformat(timespec="seconds")))
+        else:
+            raise ValueError(
+                "This Google account is not authorized. Ask the admin to add your email.")
+        log_activity(c, role, "login.google", email)
+    return {"email": email, "role": role}
 
 
 # --------------------------------------------------------------------------
@@ -648,10 +850,13 @@ def pct(obtained, maximum):
 # --------------------------------------------------------------------------
 # Query builders
 # --------------------------------------------------------------------------
-def list_students(conn, grade=None, q=None):
+def list_students(conn, grade=None, q=None, owner=None):
     sql = "SELECT * FROM students"
     args = []
     where = []
+    if owner:
+        where.append("owner_email = ?")
+        args.append(owner)
     if grade:
         where.append("grade = ?")
         args.append(grade)
@@ -664,9 +869,10 @@ def list_students(conn, grade=None, q=None):
     return [dict(r) for r in conn.execute(sql, args).fetchall()]
 
 
-def attendance_summary(conn, month, grade=None):
+def attendance_summary(conn, month, grade=None, owner=None):
     grade_cond = "s.grade = ?" if grade else "TRUE"
-    args = [f"{month}-%"] + ([grade] if grade else [])
+    owner_cond = " AND s.owner_email = ?" if owner else ""
+    args = [f"{month}-%"] + ([grade] if grade else []) + ([owner] if owner else [])
     rows = conn.execute(
         f"""
         SELECT s.id, s.name, s.grade, s.roll3,
@@ -676,7 +882,7 @@ def attendance_summary(conn, month, grade=None):
                COUNT(a.id) AS marked
         FROM students s
         LEFT JOIN attendance a ON a.student_id = s.id AND a.date LIKE ?
-        WHERE {grade_cond}
+        WHERE {grade_cond}{owner_cond}
         GROUP BY s.id
         ORDER BY {grade_num()}, s.grade, s.roll3, s.name
         """,
@@ -691,7 +897,7 @@ def attendance_summary(conn, month, grade=None):
     return out
 
 
-def attendance_trend(conn, end_month, grade=None, months=12):
+def attendance_trend(conn, end_month, grade=None, months=12, owner=None):
     """Class attendance for each of the `months` months ending at end_month (inclusive).
     Months with no marked days are returned with percent=None so charts can show gaps."""
     y, mo = int(end_month[:4]), int(end_month[5:7])
@@ -699,7 +905,8 @@ def attendance_trend(conn, end_month, grade=None, months=12):
     start_total = end_total - (months - 1)
     start_month = f"{start_total // 12:04d}-{start_total % 12 + 1:02d}"
     grade_cond = " AND s.grade = ?" if grade else ""
-    args = [start_month, end_month] + ([grade] if grade else [])
+    owner_cond = " AND s.owner_email = ?" if owner else ""
+    args = [start_month, end_month] + ([grade] if grade else []) + ([owner] if owner else [])
     rows = conn.execute(
         f"""
         SELECT substr(a.date,1,7) AS m,
@@ -708,7 +915,7 @@ def attendance_trend(conn, end_month, grade=None, months=12):
                SUM(CASE WHEN a.status='late'    THEN 1 ELSE 0 END) AS late,
                COUNT(*) AS marked
         FROM attendance a JOIN students s ON s.id = a.student_id
-        WHERE substr(a.date,1,7) BETWEEN ? AND ?{grade_cond}
+        WHERE substr(a.date,1,7) BETWEEN ? AND ?{grade_cond}{owner_cond}
         GROUP BY substr(a.date,1,7)
         """, tuple(args)).fetchall()
     by_month = {r["m"]: r for r in rows}
@@ -729,11 +936,15 @@ def attendance_trend(conn, end_month, grade=None, months=12):
     return out
 
 
-def build_report(conn, month, grade=None):
-    students = list_students(conn, grade=grade)
-    tests = [dict(r) for r in conn.execute(
-        "SELECT * FROM tests WHERE month = ? ORDER BY COALESCE(test_date, created_at), id",
-        (month,)).fetchall()]
+def build_report(conn, month, grade=None, owner=None):
+    students = list_students(conn, grade=grade, owner=owner)
+    test_sql = "SELECT * FROM tests WHERE month = ?"
+    test_args: list = [month]
+    if owner:
+        test_sql += " AND owner_email = ?"
+        test_args.append(owner)
+    test_sql += " ORDER BY COALESCE(test_date, created_at), id"
+    tests = [dict(r) for r in conn.execute(test_sql, tuple(test_args)).fetchall()]
     test_ids = [t["id"] for t in tests]
 
     scores = {}
@@ -743,7 +954,7 @@ def build_report(conn, month, grade=None):
             test_ids).fetchall()
         scores = {(m["test_id"], m["student_id"]): m["score"] for m in marks}
 
-    att = {row["id"]: row for row in attendance_summary(conn, month, grade=grade)}
+    att = {row["id"]: row for row in attendance_summary(conn, month, grade=grade, owner=owner)}
 
     rows = []
     for s in students:
@@ -785,7 +996,8 @@ def build_report(conn, month, grade=None):
         "tests": len(tests),
     }
     return {"month": month, "grade": grade, "tests": tests, "rows": rows,
-            "class": class_stats, "trend": attendance_trend(conn, month, grade=grade)}
+            "class": class_stats,
+            "trend": attendance_trend(conn, month, grade=grade, owner=owner)}
 
 
 def student_detail(conn, student_id):
@@ -924,11 +1136,17 @@ class Handler(BaseHTTPRequestHandler):
         return None
 
     def auth(self, require_role=None):
-        """Returns role or sends an error response and returns None."""
-        role = session_role(self._token())
-        if not role:
+        """Returns role or sends an error response and returns None.
+
+        Also caches the signed-in Gmail (if any) on `self._email` so handlers
+        can scope data without re-reading the session.
+        """
+        info = session_info(self._token())
+        if not info:
             self.fail("Session expired or not signed in.", 401)
             return None
+        self._email = info.get("email")
+        role = info["role"]
         if require_role == "admin" and role != "admin":
             self.fail("Admin access required.", 403)
             return None
@@ -957,6 +1175,7 @@ class Handler(BaseHTTPRequestHandler):
         self._handle("PUT")
 
     def _handle(self, method):
+        self._email = None
         parsed = urlparse(self.path)
         path = parsed.path
         if path.startswith("/api/"):
@@ -1028,7 +1247,39 @@ class Handler(BaseHTTPRequestHandler):
 
         # --- public ---
         if method == "GET" and path == "/api/status":
-            self.send_json({"setup_required": setup_required(), "app": "Academic Ledger"})
+            self.send_json({"setup_required": setup_required(), "app": "Academic Ledger",
+                            "google_enabled": google_enabled()})
+            return
+
+        # Google sign-in config (public): the frontend needs the client id to
+        # render the button, and whether sign-in is on at all. No secrets here.
+        if method == "GET" and path == "/api/auth/config":
+            self.send_json({"enabled": google_enabled(), "client_id": GOOGLE_CLIENT_ID})
+            return
+
+        # Google sign-in: exchange the browser's ID token for a session.
+        if method == "POST" and path == "/api/auth/google":
+            if not google_enabled():
+                self.fail("Google sign-in is not configured on this server.", 503)
+                return
+            ip = self.client_ip()
+            wait = rate_check(ip, "login")
+            if wait:
+                self.fail(f"Too many attempts. Try again in {wait} seconds.", 429,
+                          extra={"Retry-After": str(wait)})
+                return
+            rate_fail(ip, "login")
+            b = self.body()
+            credential = b.get("credential")
+            try:
+                who = verify_google_token(credential)
+            except ValueError as exc:
+                time.sleep(0.3)
+                self.fail(str(exc), 401)
+                return
+            rate_clear(ip, "login")
+            self.send_json({"ok": True, "role": who["role"], "email": who["email"],
+                            "token": create_session(who["role"], email=who["email"])})
             return
 
         # Help assistant — public (people may need help before signing in) but
@@ -1079,10 +1330,12 @@ class Handler(BaseHTTPRequestHandler):
                 return
             except (URLError, TimeoutError, OSError) as exc:
                 print(f"[support] network error: {exc}", file=sys.stderr)
+                record_support_error("network", str(exc))
                 self.fail("The help assistant could not be reached.", 502)
                 return
-            except Exception:
+            except Exception as exc:
                 traceback.print_exc()
+                record_support_error("internal", exc.__class__.__name__)
                 self.fail("The help assistant failed to answer.", 502)
                 return
             if not reply:
@@ -1162,7 +1415,7 @@ class Handler(BaseHTTPRequestHandler):
         if method == "GET" and path == "/api/me":
             role = self.auth()
             if role:
-                self.send_json({"role": role})
+                self.send_json({"role": role, "email": getattr(self, "_email", None)})
             return
 
         # --- everything below needs a session ---
@@ -1170,6 +1423,10 @@ class Handler(BaseHTTPRequestHandler):
         if not role:
             return
         is_admin = role == "admin"
+        # Per-user data isolation: a Gmail-signed-in teacher sees/stamps only
+        # their own rows. Admin (and code-based sessions, which pre-date this
+        # model and have no email) are unrestricted.
+        scope = None if (is_admin or not getattr(self, "_email", None)) else self._email
         if role == "observer" and method in ("POST", "DELETE", "PUT"):
             self.fail("Observer access is read-only.", 403)
             return
@@ -1183,6 +1440,28 @@ class Handler(BaseHTTPRequestHandler):
                     "SELECT role, action, detail, created_at FROM activity "
                     "ORDER BY id DESC LIMIT 150")]
             self.send_json({"activity": rows})
+            return
+
+        # Help-assistant diagnostics (admin only). A help desk that has stopped
+        # answering gives no clue from the outside whether the key is missing, the model
+        # was retired, or the provider is down. This answers all three from in the app.
+        if method == "GET" and path == "/api/support/diagnostics":
+            if not is_admin:
+                self.fail("Admin access required.", 403)
+                return
+            in_use = SUPPORT_MODEL_OVERRIDE or SUPPORT_MODEL
+            models, why = provider_model_list() if SUPPORT_API_KEY else (None, None)
+            self.send_json({
+                "enabled": bool(SUPPORT_API_KEY),
+                "configured_model": SUPPORT_MODEL,
+                "in_use_model": in_use,
+                "fallback_model": SUPPORT_FALLBACK_MODEL,
+                "using_fallback": SUPPORT_MODEL_OVERRIDE is not None,
+                "provider_reachable": (models is not None) if SUPPORT_API_KEY else None,
+                "provider_error": why,
+                "model_available": (in_use in models) if models is not None else None,
+                "last_error": SUPPORT_LAST_ERROR,
+            })
             return
 
         # codes
@@ -1210,14 +1489,61 @@ class Handler(BaseHTTPRequestHandler):
             self.send_json({"ok": True})
             return
 
+        # Google users (admin only): who is allowed to sign in with Gmail,
+        # and which role each address gets. Bootstrap admins also come from
+        # GOOGLE_ADMIN_EMAILS, but anything added here persists in the DB.
+        if path == "/api/users":
+            if not is_admin:
+                self.fail("Admin access required.", 403)
+                return
+            if method == "GET":
+                with db_conn() as c:
+                    rows = [dict(r) for r in c.execute(
+                        "SELECT email, role, created_at FROM users ORDER BY role, email")]
+                self.send_json({"users": rows})
+                return
+            if method == "POST":
+                b = self.body()
+                email = text(b.get("email"), "Email", 3, 254).lower()
+                if "@" not in email or email.startswith("@") or email.endswith("@"):
+                    raise ValueError("Enter a valid email address.")
+                role = b.get("role")
+                if role not in ("admin", "teacher"):
+                    raise ValueError("Role must be admin or teacher.")
+                with db_conn() as c:
+                    c.execute(
+                        "INSERT INTO users(email, role, created_at) VALUES(?,?,?) "
+                        "ON CONFLICT(email) DO UPDATE SET role = excluded.role",
+                        (email, role, datetime.now().isoformat(timespec="seconds")))
+                    log_activity(c, role, "user.add", f"{email} · {role}")
+                self.send_json({"ok": True})
+                return
+            if method == "DELETE":
+                email = (q("email") or "").strip().lower()
+                if not email:
+                    raise ValueError("An email is required.")
+                if email == getattr(self, "_email", None):
+                    raise ValueError("You cannot remove your own access.")
+                with db_conn() as c:
+                    row = c.execute("SELECT 1 FROM users WHERE email = ?", (email,)).fetchone()
+                    if not row:
+                        raise ValueError("No such user.")
+                    c.execute("DELETE FROM users WHERE email = ?", (email,))
+                    log_activity(c, role, "user.remove", email)
+                self.send_json({"ok": True})
+                return
+
         # students
         if path == "/api/students":
             if method == "GET":
                 with db_conn() as c:
-                    students = list_students(c, grade=q("grade"), q=q("q"))
-                    grades = [r["grade"] for r in c.execute(
-                        f"SELECT grade FROM (SELECT DISTINCT grade FROM students) AS g "
-                        f"ORDER BY {grade_num('g.grade')}, g.grade")]
+                    students = list_students(c, grade=q("grade"), q=q("q"), owner=scope)
+                    if scope:
+                        grades = sorted({r["grade"] for r in students})
+                    else:
+                        grades = [r["grade"] for r in c.execute(
+                            f"SELECT grade FROM (SELECT DISTINCT grade FROM students) AS g "
+                            f"ORDER BY {grade_num('g.grade')}, g.grade")]
                 self.send_json({"students": students, "grades": grades})
                 return
             if method == "POST":
@@ -1231,8 +1557,10 @@ class Handler(BaseHTTPRequestHandler):
                 try:
                     with db_conn() as c:
                         student_id = insert_id(
-                            c, "INSERT INTO students(name, grade, roll3, created_at) VALUES(?,?,?,?)",
-                            (name, grade, roll3, datetime.now().isoformat(timespec="seconds")))
+                            c, "INSERT INTO students(name, grade, roll3, owner_email, created_at) "
+                               "VALUES(?,?,?,?,?)",
+                            (name, grade, roll3, getattr(self, "_email", None),
+                             datetime.now().isoformat(timespec="seconds")))
                         log_activity(c, role, "student.add", f"{name} · {grade}-{roll3}")
                 except Exception as e:
                     if not is_unique_violation(e):
@@ -1260,7 +1588,7 @@ class Handler(BaseHTTPRequestHandler):
             d = date_of(q("date"))
             grade = q("grade")
             with db_conn() as c:
-                students = list_students(c, grade=grade)
+                students = list_students(c, grade=grade, owner=scope)
                 marked = {r["student_id"]: r["status"] for r in c.execute(
                     "SELECT student_id, status FROM attendance WHERE date = ?", (d,))}
             for s in students:
@@ -1271,7 +1599,7 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/api/attendance/month" and method == "GET":
             m = month_of(q("month"))
             with db_conn() as c:
-                rows = attendance_summary(c, m, grade=q("grade"))
+                rows = attendance_summary(c, m, grade=q("grade"), owner=scope)
             self.send_json({"month": m, "rows": rows})
             return
 
@@ -1307,9 +1635,11 @@ class Handler(BaseHTTPRequestHandler):
             if method == "GET":
                 m = month_of(q("month"))
                 with db_conn() as c:
+                    tcond = " AND owner_email = ?" if scope else ""
+                    targs: list = [m] + ([scope] if scope else [])
                     tests = [dict(r) for r in c.execute(
-                        "SELECT * FROM tests WHERE month = ? ORDER BY COALESCE(test_date, created_at), id",
-                        (m,))]
+                        "SELECT * FROM tests WHERE month = ?" + tcond +
+                        " ORDER BY COALESCE(test_date, created_at), id", tuple(targs))]
                 self.send_json({"month": m, "tests": tests})
                 return
             if method == "POST":
@@ -1327,8 +1657,10 @@ class Handler(BaseHTTPRequestHandler):
                     test_date = date_of(test_date)
                 with db_conn() as c:
                     tid = insert_id(
-                        c, "INSERT INTO tests(name, month, max_score, test_date, created_at) VALUES(?,?,?,?,?)",
-                        (name, m, max_score, test_date, datetime.now().isoformat(timespec="seconds")))
+                        c, "INSERT INTO tests(name, month, max_score, test_date, owner_email, created_at) "
+                           "VALUES(?,?,?,?,?,?)",
+                        (name, m, max_score, test_date, getattr(self, "_email", None),
+                         datetime.now().isoformat(timespec="seconds")))
                     log_activity(c, role, "test.create", name)
                 self.send_json({"ok": True, "id": tid})
                 return
@@ -1353,7 +1685,9 @@ class Handler(BaseHTTPRequestHandler):
                     t = c.execute("SELECT * FROM tests WHERE id = ?", (tid,)).fetchone()
                     if not t:
                         raise ValueError("Test not found.")
-                    students = list_students(c, grade=q("grade"))
+                    if scope and t["owner_email"] != scope:
+                        raise ValueError("Test not found.")   # not yours: 404, no leak
+                    students = list_students(c, grade=q("grade"), owner=scope)
                     marks = {r["student_id"]: r["score"] for r in c.execute(
                         "SELECT student_id, score FROM scores WHERE test_id = ?", (tid,))}
                 for s in students:
@@ -1370,10 +1704,18 @@ class Handler(BaseHTTPRequestHandler):
                     t = c.execute("SELECT * FROM tests WHERE id = ?", (tid,)).fetchone()
                     if not t:
                         raise ValueError("Test not found.")
+                    if scope and t["owner_email"] != scope:
+                        raise ValueError("Test not found.")   # not yours: 404, no leak
                     ceiling = float(t["max_score"])
                     for e in entries:
                         raw = e.get("score")
                         sid = int(e.get("student_id") or 0)
+                        if scope:
+                            # only your own students may be scored
+                            owner = c.execute("SELECT owner_email FROM students WHERE id = ?",
+                                              (sid,)).fetchone()
+                            if not owner or owner["owner_email"] not in (scope, None):
+                                raise ValueError("Student not found.")
                         if raw in (None, ""):
                             c.execute("DELETE FROM scores WHERE test_id = ? AND student_id = ?", (tid, sid))
                             continue
@@ -1395,7 +1737,7 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/api/report" and method == "GET":
             m = month_of(q("month"))
             with db_conn() as c:
-                report = build_report(c, m, grade=q("grade"))
+                report = build_report(c, m, grade=q("grade"), owner=scope)
             self.send_json(report)
             return
 
@@ -1403,6 +1745,8 @@ class Handler(BaseHTTPRequestHandler):
             sid = int(q("id", "0") or 0)
             with db_conn() as c:
                 data = student_detail(c, sid)
+                if scope and data.get("student", {}).get("owner_email") not in (scope, None):
+                    raise ValueError("Student not found.")   # not yours: 404, no leak
             self.send_json(data)
             return
 
@@ -1410,7 +1754,7 @@ class Handler(BaseHTTPRequestHandler):
             m = month_of(q("month"))
             grade = q("grade")
             with db_conn() as c:
-                report = build_report(c, m, grade=grade)
+                report = build_report(c, m, grade=grade, owner=scope)
             buf = io.StringIO()
             writer = csv.writer(buf)
             header = ["Grade", "Roll No", "Name"]

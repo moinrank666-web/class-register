@@ -234,6 +234,11 @@ function renderLogin(message = '') {
         <span class="hint" id="code-hint">${T('login.hint.admin')}</span></div>
       <button class="btn btn-primary" style="width:100%;justify-content:center" type="submit">${T('login.submit')}</button>
     </form>
+    <div id="google-signin" class="google-box hidden">
+      <div class="google-or"><span>${T('login.or') || 'or'}</span></div>
+      <div id="google-btn"></div>
+      <p class="hint" style="text-align:center;margin-top:8px">${T('login.google.hint') || 'Sign in with your Gmail account'}</p>
+    </div>
     <p class="muted" style="font-size:12.6px;margin-top:18px;text-align:center">
       ${T('login.lost')}<br>
       <button type="button" class="help-link" id="login-help">💬 ${T('help.open')}</button>
@@ -266,6 +271,53 @@ function renderLogin(message = '') {
   });
   const lh = $('#login-help'); if (lh) lh.onclick = openHelp;
   setTimeout(() => $('#login-code').focus(), 60);
+  initGoogleSignin();
+}
+
+/* Google sign-in: fetch whether the server has it configured, then load
+   Google's script and render its button. If the server has no client id we
+   do nothing — the code form stays exactly as it was. */
+async function initGoogleSignin() {
+  let cfg;
+  try { cfg = await api('/api/auth/config'); } catch { return; }
+  if (!cfg || !cfg.enabled || !cfg.client_id) return;
+
+  window.__googleSignIn = async (response) => {
+    try {
+      const r = await api('/api/auth/google', {
+        method: 'POST', body: { credential: response.credential } });
+      App.token = r.token; App.role = r.role; App.email = r.email || null;
+      sessionStorage.setItem('cr_token', r.token);
+      sessionStorage.setItem('cr_role', r.role);
+      sessionStorage.setItem('cr_email', r.email || '');
+      toast('✅ ' + (r.email || T('toast.signedin', { role: T('role.' + r.role + '.name') })));
+      renderShell();
+    } catch (ex) {
+      $('#auth-err').innerHTML = `<div class="alert">${esc(ex.message)}</div>`;
+    }
+  };
+
+  const mount = () => {
+    if (!window.google || !window.google.accounts || !window.google.accounts.id) return;
+    window.google.accounts.id.initialize({
+      client_id: cfg.client_id,
+      callback: window.__googleSignIn,
+    });
+    const el = $('#google-btn');
+    if (!el) return;
+    $('#google-signin').classList.remove('hidden');
+    window.google.accounts.id.renderButton(el, {
+      theme: 'outline', size: 'large', width: 320, text: 'continue_with',
+    });
+  };
+
+  if (window.google) { mount(); return; }
+  const s = document.createElement('script');
+  s.src = 'https://accounts.google.com/gsi/client';
+  s.async = true;
+  s.defer = true;
+  s.onload = mount;
+  document.head.appendChild(s);
 }
 
 /* ------------------------------ shell ------------------------------ */
@@ -416,6 +468,45 @@ async function openCodeModal() {
       closeModal(); toast(T('toast.codes'));
     } catch (ex) { $('#code-err').innerHTML = `<div class="alert">${esc(ex.message)}</div>`; }
   };
+}
+
+/* Answers the three questions an operator actually has when the help desk stops
+   working: is it switched on, which model is it using, and can the provider be
+   reached. Admin-only, because it describes the deployment rather than the register. */
+async function openDiagModal() {
+  openModal({
+    title: T('diag.title'),
+    body: `<div id="diag-body">${T('diag.loading')}</div>`,
+    footer: `<button class="btn btn-ghost" id="m-cancel">${T('btn.cancel')}</button>`,
+  });
+  $('#m-cancel').onclick = closeModal;
+  let d;
+  try { d = await api('/api/support/diagnostics'); }
+  catch (ex) {
+    const b = $('#diag-body');
+    if (b) b.innerHTML = `<div class="alert">${esc(ex.message)}</div>`;
+    return;
+  }
+  const body = $('#diag-body'); if (!body) return;
+  const yn = v => (v === true ? T('diag.yes') : v === false ? T('diag.no') : T('diag.unknown'));
+  const state = v => (v === true ? 'ok' : v === false ? 'bad' : '');
+  const row = (label, value, cls) =>
+    `<div class="diag-row"><span>${esc(label)}</span><b class="${cls}">${esc(value)}</b></div>`;
+  const rows = [
+    row(T('diag.enabled'), yn(d.enabled), state(d.enabled)),
+    row(T('diag.configured'), d.configured_model || T('diag.none')),
+    row(T('diag.inUse'), d.in_use_model || T('diag.none')),
+    row(T('diag.fallback'), d.fallback_model || T('diag.off')),
+    row(T('diag.provider'), yn(d.provider_reachable), state(d.provider_reachable)),
+    row(T('diag.modelAvailable'), yn(d.model_available), state(d.model_available)),
+  ];
+  const notes = [];
+  if (d.provider_error) notes.push(`<div class="notice">${esc(d.provider_error)}</div>`);
+  if (d.using_fallback) notes.push(`<div class="notice">${esc(T('diag.usingFallback'))}</div>`);
+  if (d.last_error) notes.push(`<div class="alert">${esc(T('diag.lastError'))}: ` +
+    `${esc(d.last_error.at || '')} · ${esc(d.last_error.kind || '')} — ${esc(d.last_error.detail || '')}</div>`);
+  notes.push(`<div class="muted diag-hint">${esc(T('diag.fix'))}</div>`);
+  body.innerHTML = rows.join('') + notes.join('');
 }
 
 /* ------------------------------ students ------------------------------ */
@@ -1229,6 +1320,7 @@ function menuHtml() {
       ${item('lang', '🌐', T('menu.lang'), langNative(getLang()))}
       ${item('theme', '🎨', T('theme.label'), themeLabel())}
       ${App.role === 'admin' ? item('codes', '⚙️', T('menu.codes')) : ''}
+      ${App.role === 'admin' ? item('diag', '🩺', T('diag.menu')) : ''}
       ${item('ask', '💬', T('help.title'))}
       ${item('help', '⌨️', T('cmd.help.title'))}
     </div>
@@ -1258,6 +1350,7 @@ function runAction(a) {
   if (a === 'out')    { signOut(); return; }
   if (a === 'help')   { showCmdHelp(); return; }
   if (a === 'codes')  { if (App.role === 'admin') openCodeModal(); return; }
+  if (a === 'diag')   { if (App.role === 'admin') openDiagModal(); return; }
   if (a === 'add')    { if (App.role === 'admin' || App.role === 'teacher') openAddStudent(); return; }
   if (a === 'test')   { if (App.role !== 'observer') openNewTest(); return; }
   if (NAV.some(n => n.id === a)) {
@@ -1280,6 +1373,8 @@ function paletteItems() {
   items.push({ g: 'prefs', icon: '🎨', label: T('theme.label'), right: themeLabel(), run: () => runAction('theme') });
   if (App.role === 'admin')
     items.push({ g: 'prefs', icon: '⚙️', label: T('menu.codes'), run: () => runAction('codes') });
+  if (App.role === 'admin')
+    items.push({ g: 'prefs', icon: '🩺', label: T('diag.menu'), run: () => runAction('diag') });
   items.push({ g: 'prefs', icon: '💬', label: T('help.title'), run: () => runAction('ask') });
   items.push({ g: 'prefs', icon: '⌨️', label: T('cmd.help.title'), run: showCmdHelp });
   items.push({ g: 'prefs', icon: '⎋', label: T('menu.out'), run: () => runAction('out') });
@@ -1364,11 +1459,12 @@ const CMD_META = [
   { s: ':add',    d: 'cmd.desc.add',  gate: 'edit' },
   { s: ':test',   d: 'cmd.desc.test', gate: 'edit' },
   { s: ':codes',  d: 'cmd.desc.codes', gate: 'admin' },
+  { s: ':diag',   d: 'cmd.desc.diag',  gate: 'admin' },
   { s: ':export', d: 'cmd.desc.export' },
   { s: ':print',  d: 'cmd.desc.print' },
   { s: ':clear',  d: 'cmd.desc.clear' },
 ];
-const NO_ARG = new Set([':help', ':add', ':test', ':codes', ':export', ':print', ':clear']);
+const NO_ARG = new Set([':help', ':add', ':test', ':codes', ':diag', ':export', ':print', ':clear']);
 const cmdLocked = m => (m.gate === 'admin' && App.role !== 'admin') ||
   (m.gate === 'edit' && !(App.role === 'admin' || App.role === 'teacher'));
 const sortIc = (k, f) => (f.sort !== k ? ' ⇅' : f.sortDir === -1 ? ' ▼' : ' ▲');
@@ -1429,6 +1525,7 @@ function runCommand(raw) {
     case 'add':   if (!canEdit) return lockedCmd(); openAddStudent(); return true;
     case 'test':  if (!canEdit) return lockedCmd(); openNewTest(); return true;
     case 'codes': if (!isAdmin) return lockedCmd(); openCodeModal(); return true;
+    case 'diag':  if (!isAdmin) return lockedCmd(); openDiagModal(); return true;
     case 'export': exportCsv(App.filters.report.month, App.filters.report.grade); return true;
     case 'print': window.print(); return true;
     case 'clear':
